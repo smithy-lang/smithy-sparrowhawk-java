@@ -1,0 +1,3 @@
+software.amazon.smithy.protocol.traits.IdxTrait$Provider
+software.amazon.smithy.protocol.traits.IndexedServiceTrait$Provider
+software.amazon.smithy.protocol.traits.Rpcv2SparrowhawkTrait$Provider
