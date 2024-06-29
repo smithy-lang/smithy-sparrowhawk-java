@@ -1,4 +1,4 @@
-# [DRAFT] Sparrowhawk Format
+# Sparrowhawk Format
 
 The Sparrowhawk format is named after the [American kestrel](https://en.wikipedia.org/wiki/American_kestrel). It's the smallest bird in its family, but can still achieve speeds of over 100 MPH in dives while hunting. Our format aims for similar goals: we want something small and fast. By leaning in to Smithy model semantics, we can offer a payload that is both compact and fast to encode and decode.
 
