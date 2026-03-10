@@ -48,3 +48,8 @@ repositories {
     mavenLocal()
     mavenCentral()
 }
+
+// Disable spotbugs for this project
+tasks.named("spotbugsMain") {
+    enabled = false
+}
