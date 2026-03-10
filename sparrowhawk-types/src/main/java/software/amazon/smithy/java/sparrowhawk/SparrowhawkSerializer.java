@@ -5,7 +5,11 @@
 
 package software.amazon.smithy.java.sparrowhawk;
 
-import static software.amazon.smithy.java.sparrowhawk.KConstants.*;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeByteListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeEightBListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeFourBListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeLenPrefixedListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeVarintListLength;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +19,8 @@ import java.util.List;
 
 public final class SparrowhawkSerializer {
     public static final byte EMPTY_LIST_SIZE_VARINT = 1;
-    private static final byte BOOL_FALSE = 1, BOOL_TRUE = 3;
+    static final byte BOOL_FALSE = 1, BOOL_TRUE = 3;
+    static final byte EXACTLY_ONE_LIST = encodeByteLE64(KConstants.listField(1));
 
     private int position;
     private final byte[] payload;
@@ -40,6 +45,10 @@ public final class SparrowhawkSerializer {
         payload[position++] = b;
     }
 
+    public void writeEmptyObject() {
+        payload[position++] = 1;
+    }
+
     public void checkFull() {
         if (position != payload.length) {
             notFull();
@@ -61,6 +70,10 @@ public final class SparrowhawkSerializer {
 
     public void writeVar1(int i) {
         payload[position++] = (byte) (2 * i + 1);
+    }
+
+    public void writeVarUL(int i) {
+        doWriteVar4(i);
     }
 
     public void writeVarUL(long i) {
@@ -113,7 +126,6 @@ public final class SparrowhawkSerializer {
         }
     }
 
-
     public void write4(int i) {
         payload[position++] = (byte) (i);
         payload[position++] = (byte) ((i >>> 8) & 0xFF);
@@ -136,6 +148,10 @@ public final class SparrowhawkSerializer {
         write4(Float.floatToIntBits(f));
     }
 
+    public void writeFloat(Float f) {
+        writeFloat(f.floatValue());
+    }
+
     public void writeDouble(double d) {
         write8(Double.doubleToLongBits(d));
     }
@@ -146,6 +162,11 @@ public final class SparrowhawkSerializer {
 
     public void writeInstant(Instant i) {
         writeDouble(i.toEpochMilli() / 1000d);
+    }
+
+    public void writeBigDecimal(Object o) {
+        BigDecimalHolder holder = (BigDecimalHolder) o;
+        holder.encodeTo(this);
     }
 
     public void writeBytes(ByteBuffer b) {
@@ -317,6 +338,88 @@ public final class SparrowhawkSerializer {
         }
     }
 
+    public void writeDateList(List<Date> list) {
+        int sz = list.size();
+        writeVarUL(encodeEightBListLength(sz));
+        for (int i = 0; i < sz; i++) {
+            writeDate(list.get(i));
+        }
+    }
+
+    public void writeDateList(Date[] list) {
+        int sz = list.length;
+        writeVarUL(encodeEightBListLength(sz));
+        for (int i = 0; i < sz; i++) {
+            writeDate(list[i]);
+        }
+    }
+
+    public void writeBlobList(List<ByteBuffer> list) {
+        int sz = list.size();
+        writeVarUL(encodeLenPrefixedListLength(sz));
+        for (int i = 0; i < sz; i++) {
+            writeBytes(list.get(i));
+        }
+    }
+
+    public void writeSparseBlobList(List<ByteBuffer> blobs) {
+        writeVarUL(encodeLenPrefixedListLength(blobs.size()));
+        for (ByteBuffer blob : blobs) {
+            if (blob == null) {
+                writeEmptyObject();
+            } else {
+                int s = blob.remaining() + ulongSize(encodeByteListLength(blob.remaining())) + 1;
+                writeVarUL(encodeByteListLength(s));
+                writeRawByte(EXACTLY_ONE_LIST);
+                writeBytes(blob);
+            }
+        }
+    }
+
+    public static int sparseBlobListSize(List<ByteBuffer> blobs) {
+        int size = ulongSize(encodeLenPrefixedListLength(blobs.size()));
+        for (ByteBuffer blob : blobs) {
+            if (blob != null) {
+                // size = blob size + blob length tag + 1 fieldset + length tag for the preceding
+                int s = blob.remaining() + ulongSize(encodeByteListLength(blob.remaining())) + 1;
+                s += ulongSize(encodeByteListLength(s));
+                size += s;
+            } else {
+                size++;
+            }
+        }
+        return size;
+    }
+
+    public void writeSparseObjectList(List<? extends SparrowhawkObject> objects) {
+        writeVarUL(encodeLenPrefixedListLength(objects.size()));
+        for (SparrowhawkObject object : objects) {
+            if (object == null) {
+                writeEmptyObject();
+            } else {
+                int s = object.size() + ulongSize(encodeByteListLength(object.size())) + 1;
+                writeVarUL(encodeByteListLength(s));
+                writeRawByte(EXACTLY_ONE_LIST);
+                object.encodeTo(this);
+            }
+        }
+    }
+
+    public static int sparseObjectListSize(List<? extends SparrowhawkObject> objects) {
+        int size = ulongSize(encodeLenPrefixedListLength(objects.size()));
+        for (SparrowhawkObject object : objects) {
+            if (object != null) {
+                // size = object size + object length tag + 1 fieldset + length tag for the preceding
+                int s = object.size() + ulongSize(encodeByteListLength(object.size())) + 1;
+                s += ulongSize(encodeByteListLength(s));
+                size += s;
+            } else {
+                size++;
+            }
+        }
+        return size;
+    }
+
     private static final int I_1B = (~0 << 7);
     private static final int I_2B = (~0 << 14);
     private static final int I_3B = (~0 << 21);
@@ -392,5 +495,22 @@ public final class SparrowhawkSerializer {
 
     public static void missingField(String message) {
         throw new NullPointerException(message);
+    }
+
+    public static int blobListEncodedSize(List<ByteBuffer> list) {
+        int len = list.size();
+        int sz = uintSize(encodeLenPrefixedListLength(len));
+        for (int i = 0; i < len; i++) {
+            sz += byteListLengthEncodedSize(list.get(i));
+        }
+        return sz;
+    }
+
+    public static byte encodeByteLE64(long b) {
+        long enc = zigzag8(b);
+        if (ulongSize(enc) > 1) {
+            throw new RuntimeException("can't encode " + b + " into one byte");
+        }
+        return (byte) enc;
     }
 }

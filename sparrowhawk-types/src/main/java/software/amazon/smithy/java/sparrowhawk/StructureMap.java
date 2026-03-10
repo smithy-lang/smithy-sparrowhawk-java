@@ -1,39 +1,60 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- * SPDX-License-Identifier: Apache-2.0
- */
-
 package software.amazon.smithy.java.sparrowhawk;
 
-import static software.amazon.smithy.java.sparrowhawk.KConstants.*;
-import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.*;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.decodeElementCount;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeByteListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeLenPrefixedListLength;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.EMPTY_LIST_SIZE_VARINT;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.byteListLengthEncodedSize;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.uintSize;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.ulongSize;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 
-@SuppressWarnings("unchecked")
-public final class StructureMap<T extends SparrowhawkObject> implements SparrowhawkObject {
+@SuppressWarnings("unchecked,rawtypes")
+public final class StructureMap<T extends SparrowhawkObject> extends SparrowhawkMap<T> implements SparrowhawkObject {
     private static final long REQUIRED_LIST_FIELDSET_0 = KConstants.listField(0b11);
     private static final ByteBuffer[] EMPTY_KEYS = new ByteBuffer[0];
-    private static final Object[] EMPTY_VALUES = new Object[0];
+    private static final SparrowhawkObject[] EMPTY_VALUES = new SparrowhawkObject[0];
 
     private ByteBuffer[] keys;
-    private Object[] values;
-    private final Supplier<T> factory;
+    private SparrowhawkObject[] values;
+    private final Supplier<SparrowhawkObject> factory;
 
-    public StructureMap(Supplier<T> factory) {
+    public StructureMap(Supplier<SparrowhawkObject> factory) {
         this.factory = factory;
     }
 
+    @Override
     public Map<String, T> toMap() {
         int sz = keys.length;
-        T[] values = (T[]) this.values;
-        Map<String, T> m = new HashMap<>(sz / 3 * 4);
+        if (sz == 0) {
+            return Collections.emptyMap();
+        }
+
+        SparrowhawkObject[] values = this.values;
+        Map m = new HashMap<>(sz / 3 * 4);
         for (int i = 0; i < sz; i++) {
             m.put(string(keys[i]), values[i]);
+        }
+        return m;
+    }
+
+    public Map<String, T> toNestedMap(int depth) {
+        int sz = keys.length;
+        Map m = new HashMap<>(sz / 3 * 4);
+        for (int i = 0; i < sz; i++) {
+            Object val;
+            if (depth == 1) {
+                val = ((SparrowhawkMap) values[i]).toMap();
+            } else {
+                val = ((StructureMap) values[i]).toNestedMap(depth - 1);
+            }
+            m.put(string(keys[i]), val);
         }
         return m;
     }
@@ -42,6 +63,43 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
         return new String(b.array(), b.arrayOffset() + b.position(), b.remaining(), StandardCharsets.UTF_8);
     }
 
+    public void fromNestedMap(Map<String, ?> map, int depth, Supplier<SparrowhawkMap<?>> supp) {
+        int len = map.size();
+        if (len == 0) {
+            keys = EMPTY_KEYS;
+            values = EMPTY_VALUES;
+            $size = 0;
+            return;
+        }
+
+        SparrowhawkObject[] values = new SparrowhawkObject[len];
+        ByteBuffer[] keys = new ByteBuffer[len];
+        int size = 1 + (2 * uintSize(encodeLenPrefixedListLength(len)));
+        this.keys = keys;
+        int i = 0;
+        for (Map.Entry<String, ?> entry : map.entrySet()) {
+            byte[] key = entry.getKey().getBytes(StandardCharsets.UTF_8);
+            keys[i] = ByteBuffer.wrap(key);
+            Map value = (Map) entry.getValue();
+            SparrowhawkObject inner;
+            if (depth == 1) {
+                SparrowhawkMap<?> m = supp.get();
+                m.fromMap(value);
+                inner = m;
+            } else {
+                StructureMap sm = new StructureMap(null);
+                sm.fromNestedMap(value, depth - 1, supp);
+                inner = sm;
+            }
+
+            values[i++] = inner;
+            size += byteListLengthEncodedSize(key.length) + byteListLengthEncodedSize(inner.size());
+        }
+        this.values = values;
+        this.$size = size;
+    }
+
+    @Override
     public void fromMap(Map<String, T> map) {
         int len = map.size();
         if (len == 0) {
@@ -53,14 +111,14 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
 
         ByteBuffer[] keys = new ByteBuffer[len];
         this.keys = keys;
-        T[] values = (T[]) new SparrowhawkObject[len];
+        SparrowhawkObject[] values = new SparrowhawkObject[len];
         this.values = values;
         int i = 0;
         int size = 1 + (2 * uintSize(encodeLenPrefixedListLength(len)));
         for (Map.Entry<String, T> entry : map.entrySet()) {
             byte[] key = entry.getKey().getBytes(StandardCharsets.UTF_8);
             keys[i] = ByteBuffer.wrap(key);
-            T value = entry.getValue();
+            SparrowhawkObject value = entry.getValue();
             values[i++] = value;
             size += byteListLengthEncodedSize(key.length) + byteListLengthEncodedSize(value.size());
         }
@@ -88,7 +146,7 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
             values = readValues(d, nvalues);
         } else {
             keys = EMPTY_KEYS;
-            values = (T[]) EMPTY_VALUES;
+            values = EMPTY_VALUES;
         }
     }
 
@@ -100,10 +158,10 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
         return bs;
     }
 
-    private T[] readValues(SparrowhawkDeserializer d, int n) {
-        T[] values = (T[]) new SparrowhawkObject[n];
+    private SparrowhawkObject[] readValues(SparrowhawkDeserializer d, int n) {
+        SparrowhawkObject[] values = new SparrowhawkObject[n];
         for (int i = 0; i < values.length; i++) {
-            T obj = factory.get();
+            SparrowhawkObject obj = factory.get();
             obj.decodeFrom(d);
             values[i] = obj;
         }
@@ -122,7 +180,7 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
                 s.writeBytes(keys[i]);
             }
             s.writeVarUL(dl);
-            T[] values = (T[]) this.values;
+            SparrowhawkObject[] values = this.values;
             for (int i = 0; i < values.length; i++) {
                 values[i].encodeTo(s);
             }
@@ -150,7 +208,7 @@ public final class StructureMap<T extends SparrowhawkObject> implements Sparrowh
             for (int i = 0; i < keys.length; i++) {
                 size += byteListLengthEncodedSize(keys[i].remaining());
             }
-            T[] values = (T[]) this.values;
+            SparrowhawkObject[] values = this.values;
             for (int i = 0; i < values.length; i++) {
                 size += byteListLengthEncodedSize(values[i].size());
             }

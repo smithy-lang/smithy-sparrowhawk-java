@@ -1,11 +1,8 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- * SPDX-License-Identifier: Apache-2.0
- */
-
 package software.amazon.smithy.java.sparrowhawk;
 
-import static software.amazon.smithy.java.sparrowhawk.KConstants.*;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.T_LIST;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.decodeElementCount;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeByteListLength;
 import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.byteListLengthEncodedSize;
 import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.ulongSize;
 
@@ -103,11 +100,9 @@ public final class OptionalBlob implements SparrowhawkObject {
         if (this == other) return true;
         if (!(other instanceof OptionalBlob)) return false;
         OptionalBlob o = (OptionalBlob) other;
-        return Objects.equals(getItem(), o.getItem());
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash($list_0, item, $size);
+        if (!Objects.equals(getItem(), o.getItem())) {
+            return false;
+        }
+        return true;
     }
 }

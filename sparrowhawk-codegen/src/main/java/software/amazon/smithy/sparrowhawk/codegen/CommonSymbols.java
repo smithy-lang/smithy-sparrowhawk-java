@@ -2,16 +2,13 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
-import java.nio.ByteBuffer;
 import software.amazon.smithy.codegen.core.Symbol;
 import software.amazon.smithy.codegen.core.SymbolReference;
 
 public final class CommonSymbols {
     private CommonSymbols() {}
-
 
     public enum UseOption implements SymbolReference.Option {
         STATIC
@@ -23,14 +20,6 @@ public final class CommonSymbols {
             .name(name)
             .build()
             .toReference(null, UseOption.STATIC);
-    }
-
-    public static SymbolReference imp(Class<?> klass) {
-        return Symbol.builder()
-            .namespace(klass.getPackageName(), ".")
-            .name(klass.getSimpleName())
-            .build()
-            .toReference(null);
     }
 
     public static SymbolReference imp(String namespace, String name) {
@@ -47,8 +36,13 @@ public final class CommonSymbols {
     public static final SymbolReference toList = staticImp("java.util.stream.Collectors", "toList");
     public static final SymbolReference Entry = imp("java.util.Map", "Entry");
     public static final SymbolReference SimpleEntry = imp("java.util.AbstractMap", "SimpleEntry");
+    public static final SymbolReference Map = imp("java.util", "Map");
+    public static final SymbolReference HashMap = imp("java.util", "HashMap");
+    public static final SymbolReference List = imp("java.util", "List");
+    public static final SymbolReference ArrayList = imp("java.util", "ArrayList");
     public static final SymbolReference Object = imp("java.lang", "Object");
     public static final SymbolReference Objects = imp("java.util", "Objects");
+    public static final SymbolReference ByteBuffer = imp("java.nio", "ByteBuffer");
     public static final SymbolReference missingField = staticImp(
         "software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer",
         "missingField"
@@ -147,6 +141,11 @@ public final class CommonSymbols {
         "SparrowhawkDeserializer"
     );
 
+    public static final SymbolReference SparrowhawkBigDecimalHolder = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "BigDecimalHolder"
+    );
+
     public static final SymbolReference FloatMap = imp("software.amazon.smithy.java.sparrowhawk", "FloatMap");
     public static final SymbolReference DoubleMap = imp("software.amazon.smithy.java.sparrowhawk", "DoubleMap");
     public static final SymbolReference BooleanMap = imp("software.amazon.smithy.java.sparrowhawk", "BooleanMap");
@@ -161,11 +160,41 @@ public final class CommonSymbols {
     );
     public static final SymbolReference StringMap = imp("software.amazon.smithy.java.sparrowhawk", "StringMap");
     public static final SymbolReference StructureMap = imp("software.amazon.smithy.java.sparrowhawk", "StructureMap");
+    public static final SymbolReference IntegerListMap = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "IntegerListMap"
+    );
 
-    public static final SymbolReference FLOW_PUBLISHER = Symbol.builder()
-        .namespace("java.util.concurrent.Flow", ".")
-        .name("Publisher")
-        .build()
-        .toReference(null);
-    public static final SymbolReference BYTE_BUFFER = imp(ByteBuffer.class);
+    public static final SymbolReference SparseBooleanList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseBooleanList"
+    );
+    public static final SymbolReference SparseByteList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseByteList"
+    );
+    public static final SymbolReference SparseShortList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseShortList"
+    );
+    public static final SymbolReference SparseIntegerList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseIntegerList"
+    );
+    public static final SymbolReference SparseLongList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseLongList"
+    );
+    public static final SymbolReference SparseFloatList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseFloatList"
+    );
+    public static final SymbolReference SparseDoubleList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseDoubleList"
+    );
+    public static final SymbolReference SparseTimestampList = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseTimestampList"
+    );
 }

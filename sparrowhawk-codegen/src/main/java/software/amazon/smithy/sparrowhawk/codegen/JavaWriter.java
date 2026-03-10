@@ -2,7 +2,6 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
 import java.util.function.BiFunction;
@@ -16,24 +15,21 @@ public final class JavaWriter extends SymbolWriter<JavaWriter, JavaImportContain
 
     private final SparrowhawkSettings settings;
     private final String packageName;
-    private boolean plainFile;
+    private final String fileName;
 
-    public JavaWriter(SparrowhawkSettings settings, String packageName) {
-        super(new JavaImportContainer(packageName, settings.getHeader()));
+    public JavaWriter(SparrowhawkSettings settings, String packageName, String fileName) {
+        super(new JavaImportContainer(packageName));
         this.settings = settings;
+        this.fileName = fileName;
         this.packageName = packageName;
         trimBlankLines();
         trimTrailingSpaces();
         putFormatter('T', new JavaSymbolFormatter());
     }
 
-    public void setPlain(boolean plain) {
-        this.plainFile = plain;
-    }
-
     @Override
     public String toString() {
-        if (plainFile) {
+        if (fileName.startsWith("META-INF")) {
             return super.toString();
         }
         return getImportContainer().toString() + "\n\n" + super.toString();
@@ -84,7 +80,7 @@ public final class JavaWriter extends SymbolWriter<JavaWriter, JavaImportContain
 
         @Override
         public JavaWriter apply(String filename, String namespace) {
-            return new JavaWriter(settings, namespace);
+            return new JavaWriter(settings, namespace, filename);
         }
     }
 }

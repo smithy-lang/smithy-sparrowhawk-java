@@ -1,8 +1,3 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- * SPDX-License-Identifier: Apache-2.0
- */
-
 package software.amazon.smithy.java.sparrowhawk;
 
 public final class KConstants {
@@ -49,7 +44,7 @@ public final class KConstants {
     }
 
     public static String listType(int len) {
-        if (isByteListLength(len)) return "byte";
+        if (isByteListLength(len)) return "bytes";
         int lt = len & 7;
         switch (lt) {
             case LIST_LEN_DELIMITED_ITEMS:
@@ -77,16 +72,20 @@ public final class KConstants {
         return (l << 3) + LIST_VARINTS;
     }
 
-    public static long encodeFourBListLength(long l) {
+    public static int encodeFourBListLength(int l) {
         return (l << 3) + LIST_FOUR;
     }
 
-    public static long encodeEightBListLength(long l) {
+    public static int encodeEightBListLength(int l) {
         return (l << 3) + LIST_EIGHT;
     }
 
     public static boolean isByteListLength(long l) {
         return (l & 1) == 0;
+    }
+
+    public static int decodeElementCount(int i) {
+        return i >> (1 + (2 * (i & 1)));
     }
 
     public static long decodeElementCount(long l) {

@@ -2,13 +2,21 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
 import java.io.PrintStream;
 import java.nio.ByteBuffer;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import software.amazon.smithy.java.sparrowhawk.KConstants;
@@ -65,35 +73,61 @@ public final class Enhancer {
     }
 
     private void enhanceNext(SparrowhawkDeserializer deser, Shape shape, int level) {
+        int startPos = deser.pos();
         if (shape instanceof StructureShape) {
             int type = deser.varUI();
+            int afterType = deser.pos();
             if ((type & 1) != 0) {
                 throw new BadInputException(deser.pos(), "Invalid struct (encountered type %d)", type & 7);
             }
             int structLen = type >> 1;
             if (structLen == 0) {
-                printWithIndent(level, "[Struct (size: %d, type: %s)][/Struct]", structLen, shape.getId());
+                printWithIndent(
+                    level,
+                    "[Struct (size: %d, type: %s, bytes: %d-%d)][/Struct]",
+                    structLen,
+                    shape.getId(),
+                    startPos,
+                    afterType - 1
+                );
                 return;
             }
-            printWithIndent(level, "[Struct (size: %d, type: %s)]", structLen, shape.getId());
+            printWithIndent(
+                level,
+                "[Struct (size: %d, type: %s, bytes: %d-%d)]",
+                structLen,
+                shape.getId(),
+                startPos,
+                afterType + structLen - 1
+            );
             enhanceStruct(deser, (StructureShape) shape, level + 1, structLen);
             printWithIndent(level, "[/Struct]");
         } else if (shape instanceof ListShape) {
-            long len = KConstants.decodeElementCount(deser.varUL());
+            long rawLen = deser.varUL();
+            int afterLen = deser.pos();
+            long len = KConstants.decodeElementCount(rawLen);
             Shape member = model.expectShape(((ListShape) shape).getMember().getTarget());
             if (len == 0) {
-                printWithIndent(level, "[List (size: %d, valueType: %s)][/List]", len, member.getId());
+                printWithIndent(
+                    level,
+                    "[List (size: %d, valueType: %s, bytes: %d-%d)][/List]",
+                    len,
+                    member.getId(),
+                    startPos,
+                    afterLen - 1
+                );
                 return;
             }
-            printWithIndent(level, "[List (size: %d, valueType: %s)]", len, member.getId());
+            printWithIndent(level, "[List (size: %d, valueType: %s, bytes: %d-...)]", len, member.getId(), startPos);
             for (int i = 0; i < len; i++) {
                 enhanceNext(deser, member, level + 1);
             }
-            printWithIndent(level, "[/List]");
+            printWithIndent(level, "[/List (bytes: %d-%d)]", startPos, deser.pos() - 1);
         } else if (shape instanceof MapShape) {
             Shape valueShape = model.expectShape(((MapShape) shape).getValue().getTarget());
 
             int type = deser.varUI();
+            int afterType = deser.pos();
             if ((type & 1) != 0) {
                 throw new BadInputException(deser.pos(), "Invalid map (encountered type %d)", type & 7);
             }
@@ -101,15 +135,19 @@ public final class Enhancer {
             if (structLen == 0) {
                 printWithIndent(
                     level,
-                    "[Map (size: %d, keys: %d, valueType: %s)][/Map]",
+                    "[Map (size: %d, keys: %d, valueType: %s, bytes: %d-%d)][/Map]",
                     structLen,
                     0,
-                    valueShape.getId()
+                    valueShape.getId(),
+                    startPos,
+                    afterType - 1
                 );
                 return;
             }
 
+            int beforeTsh = deser.pos();
             long typeSectionHeader = deser.varUL();
+            int afterTsh = deser.pos();
             int fieldType = (int) (typeSectionHeader & 3);
             if (fieldType != KConstants.T_LIST) {
                 throw new BadInputException(
@@ -138,12 +176,22 @@ public final class Enhancer {
                 );
             }
 
-            int keyLen = (int) KConstants.decodeElementCount(deser.varUL());
+            int beforeKeyLen = deser.pos();
+            long rawKeyLen = deser.varUL();
+            int afterKeyLen = deser.pos();
+            int keyLen = (int) KConstants.decodeElementCount(rawKeyLen);
             List<String> keys = new ArrayList<>();
+            int[] keyStartPos = new int[keyLen];
+            int[] keyEndPos = new int[keyLen];
             for (int i = 0; i < keyLen; i++) {
+                keyStartPos[i] = deser.pos();
                 keys.add(deser.string());
+                keyEndPos[i] = deser.pos() - 1;
             }
-            int valueLen = (int) KConstants.decodeElementCount(deser.varUL());
+            int beforeValLen = deser.pos();
+            long rawValLen = deser.varUL();
+            int afterValLen = deser.pos();
+            int valueLen = (int) KConstants.decodeElementCount(rawValLen);
             if (keyLen != valueLen) {
                 throw new BadInputException(
                     deser.pos(),
@@ -155,27 +203,52 @@ public final class Enhancer {
             }
             printWithIndent(
                 level,
-                "[Map (size: %d, keys: %d, valueType: %s)]",
+                "[Map (size: %d, keys: %d, valueType: %s, bytes: %d-..., typeBytes: %d-%d, tshBytes: %d-%d, keyLenBytes: %d-%d, valLenBytes: %d-%d)]",
                 structLen,
                 keyLen,
-                valueShape.getId()
+                valueShape.getId(),
+                startPos,
+                startPos,
+                afterType - 1,
+                beforeTsh,
+                afterTsh - 1,
+                beforeKeyLen,
+                afterKeyLen - 1,
+                beforeValLen,
+                afterValLen - 1
             );
             for (int i = 0; i < keyLen; i++) {
                 if (valueShape.getType().getCategory() == ShapeType.Category.SIMPLE) {
+                    int beforeVal = deser.pos();
+                    Object val = getSimpleValue(deser, valueShape);
+                    int afterVal = deser.pos();
                     printWithIndent(
                         level + 1,
-                        "[Entry (key: %s)]%s[/Entry]",
+                        "[Entry (key: %s, keyBytes: %d-%d, valueBytes: %d-%d)]%s[/Entry]",
                         keys.get(i),
-                        getSimpleValue(deser, valueShape)
+                        keyStartPos[i],
+                        keyEndPos[i],
+                        beforeVal,
+                        afterVal - 1,
+                        val
                     );
                 } else {
-                    printWithIndent(level + 1, "[Entry (key: %s)]", keys.get(i));
+                    printWithIndent(
+                        level + 1,
+                        "[Entry (key: %s, keyBytes: %d-%d)]",
+                        keys.get(i),
+                        keyStartPos[i],
+                        keyEndPos[i]
+                    );
                     enhanceNext(deser, valueShape, level + 2);
                     printWithIndent(level + 1, "[/Entry]", keys.get(i));
                 }
             }
+            printWithIndent(level, "[/Map (bytes: %d-%d)]", startPos, deser.pos() - 1);
         } else if (shape.getType().getCategory() == ShapeType.Category.SIMPLE) {
-            printWithIndent(level, "[> %s]", getSimpleValue(deser, shape));
+            Object val = getSimpleValue(deser, shape);
+            int afterVal = deser.pos();
+            printWithIndent(level, "[> %s (bytes: %d-%d)]", val, startPos, afterVal - 1);
         } else {
             throw new UnsupportedOperationException(shape.toString());
         }
@@ -189,12 +262,17 @@ public final class Enhancer {
     private void enhanceStruct(SparrowhawkDeserializer deser, StructureShape shape, int level, long len) {
         long end = deser.pos() + len;
         while (deser.pos() < end) {
+            int beforeTsh = deser.pos();
             long typeSectionHeader = deser.varUL();
+            int afterTsh = deser.pos();
             int fieldType = (int) (typeSectionHeader & 3);
 
             int offset = 0;
+            int beforeOffset = -1, afterOffset = -1;
             if ((typeSectionHeader & 4) != 0) {
+                beforeOffset = deser.pos();
                 offset = deser.varUI() + 1;
+                afterOffset = deser.pos();
             }
 
             var fieldsSet = new LinkedHashSet<Integer>();
@@ -204,25 +282,45 @@ public final class Enhancer {
                 }
             }
 
-            printWithIndent(
-                level,
-                "[TypeSection (type: %s, fields: %s)]",
-                typeSectionTypeToString(deser, fieldType),
-                fieldsSet
-            );
+            if (beforeOffset >= 0) {
+                printWithIndent(
+                    level,
+                    "[TypeSection (type: %s, fields: %s, headerBytes: %d-%d, offsetBytes: %d-%d)]",
+                    typeSectionTypeToString(deser, fieldType),
+                    fieldsSet,
+                    beforeTsh,
+                    afterTsh - 1,
+                    beforeOffset,
+                    afterOffset - 1
+                );
+            } else {
+                printWithIndent(
+                    level,
+                    "[TypeSection (type: %s, fields: %s, headerBytes: %d-%d)]",
+                    typeSectionTypeToString(deser, fieldType),
+                    fieldsSet,
+                    beforeTsh,
+                    afterTsh - 1
+                );
+            }
 
             for (Integer field : fieldsSet) {
                 MemberShape member = getSmithyMember(shape, fieldType, field);
                 Shape target = model.expectShape(member.getTarget());
                 if (target.getType().getCategory() == ShapeType.Category.SIMPLE) {
+                    int beforeVal = deser.pos();
+                    Object val = getSimpleValue(deser, target);
+                    int afterVal = deser.pos();
                     printWithIndent(
                         level + 1,
-                        "[Member (name: %s, kIdx: %d, sIdx: %d, type: %s)]%s[/Member]",
+                        "[Member (name: %s, kIdx: %d, sIdx: %d, type: %s, bytes: %d-%d)]%s[/Member]",
                         member.getMemberName(),
                         field,
                         member.expectTrait(IdxTrait.class).getValue(),
                         target.getId(),
-                        getSimpleValue(deser, target)
+                        beforeVal,
+                        afterVal - 1,
+                        val
                     );
                 } else {
                     printWithIndent(
@@ -257,6 +355,12 @@ public final class Enhancer {
             }
             case STRING, ENUM -> {
                 return deser.string();
+            }
+            case BIG_INTEGER -> {
+                return deser.bigInteger();
+            }
+            case BIG_DECIMAL -> {
+                return deser.bigDecimal();
             }
             case TIMESTAMP -> {
                 return Instant.ofEpochMilli((long) (deser.d8() * 1000L)).toString();
@@ -297,7 +401,7 @@ public final class Enhancer {
             .stream()
             .collect(Collectors.groupingBy((ms) -> {
                 switch (model.expectShape(ms.getTarget()).getType()) {
-                    case BLOB, STRING, DOCUMENT, ENUM, LIST, SET, MAP, STRUCTURE, UNION -> {
+                    case BLOB, STRING, DOCUMENT, ENUM, LIST, SET, MAP, STRUCTURE, UNION, BIG_INTEGER, BIG_DECIMAL -> {
                         return KConstants.T_LIST;
                     }
                     case BOOLEAN, BYTE, SHORT, INTEGER, LONG, INT_ENUM -> {
@@ -350,7 +454,7 @@ public final class Enhancer {
         }
 
         public BadInputException(int pos, String message, Object... args) {
-            this(String.format(message, args), pos);
+            this(java.lang.String.format(message, args), pos);
         }
     }
 

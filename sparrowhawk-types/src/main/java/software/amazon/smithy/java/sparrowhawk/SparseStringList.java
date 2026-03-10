@@ -1,8 +1,3 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- * SPDX-License-Identifier: Apache-2.0
- */
-
 package software.amazon.smithy.java.sparrowhawk;
 
 import static software.amazon.smithy.java.sparrowhawk.KConstants.decodeLenPrefixedListLengthChecked;
@@ -14,7 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class SparseStringList implements SparrowhawkObject {
+public final class SparseStringList extends SparseList<String> implements SparrowhawkObject {
     private static final OptionalBlob EMPTY_BLOB = new OptionalBlob();
     private static final OptionalBlob[] EMPTY = new OptionalBlob[0];
     private static final SparseStringList EMPTY_LIST;
@@ -60,6 +55,7 @@ public final class SparseStringList implements SparrowhawkObject {
         return size;
     }
 
+    @Override
     public List<String> toList() {
         List<String> l = new ArrayList<>(values.length);
         for (OptionalBlob value : values) {
@@ -76,6 +72,7 @@ public final class SparseStringList implements SparrowhawkObject {
         return new String(b.array(), b.arrayOffset() + b.position(), b.remaining(), StandardCharsets.UTF_8);
     }
 
+    @Override
     public int elementCount() {
         return values.length;
     }

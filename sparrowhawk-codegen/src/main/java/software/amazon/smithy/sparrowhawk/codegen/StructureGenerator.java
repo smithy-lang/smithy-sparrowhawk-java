@@ -2,38 +2,36 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
-import static software.amazon.smithy.model.shapes.ShapeType.LONG;
+import static software.amazon.smithy.model.shapes.ShapeType.DOUBLE;
+import static software.amazon.smithy.model.shapes.ShapeType.TIMESTAMP;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.Objects;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.SparseStringList;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.StringList;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.T_EIGHT;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.T_FOUR;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.T_LIST;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.T_VARINT;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.asList;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.byteListLengthEncodedSize;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.decodeElementCount;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.decodeLenPrefixedListLengthChecked;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.encodeByteListLength;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.encodeEightBListLength;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.encodeFourBListLength;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.encodeLenPrefixedListLength;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.encodeVarintListLength;
+import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.imp;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.intSize;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.lenPrefixedListLengthEncodedSize;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.longSize;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.missingField;
-import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.uintSize;
 import static software.amazon.smithy.sparrowhawk.codegen.CommonSymbols.ulongSize;
 import static software.amazon.smithy.sparrowhawk.codegen.Util.isStructure;
 import static software.amazon.smithy.utils.StringUtils.capitalize;
 import static software.amazon.smithy.utils.StringUtils.upperCase;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -44,20 +42,48 @@ import software.amazon.smithy.codegen.core.SymbolReference;
 import software.amazon.smithy.java.sparrowhawk.KConstants;
 import software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer;
 import software.amazon.smithy.model.Model;
-import software.amazon.smithy.model.shapes.*;
+import software.amazon.smithy.model.shapes.ListShape;
+import software.amazon.smithy.model.shapes.MemberShape;
+import software.amazon.smithy.model.shapes.Shape;
+import software.amazon.smithy.model.shapes.ShapeType;
+import software.amazon.smithy.model.shapes.ShapeVisitor;
+import software.amazon.smithy.model.shapes.ToShapeId;
 import software.amazon.smithy.model.traits.SparseTrait;
+import software.amazon.smithy.protocol.traits.SparrowhawkObjectTrait;
 import software.amazon.smithy.sparrowhawk.codegen.CodeSections.EndClassSection;
 import software.amazon.smithy.sparrowhawk.codegen.CodeSections.StartClassSection;
 
 public final class StructureGenerator implements Runnable {
+    private static final Map<String, Object> DEFAULT_REFERENCES;
+
+    static {
+        DEFAULT_REFERENCES = new HashMap<>();
+        try {
+            for (Field f : CommonSymbols.class.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers()) && f.getType() == SymbolReference.class) {
+                    // apparently smithy context keys have to start with a lowercase letter
+                    if (DEFAULT_REFERENCES.put(lowercaseFirstLetter(f.getName()), f.get(null)) != null) {
+                        throw new RuntimeException("duplicate context key for " + f.getName());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static String lowercaseFirstLetter(String s) {
+        return s.substring(0, 1).toLowerCase() + s.substring(1);
+    }
+
     private final Shape shape;
     private final SymbolProvider symbolProvider;
-    private final SparrowhawkSettings settings;
     private final Symbol symbol;
     private final Model model;
     private final SparrowhawkIndex index;
     private final List<FieldSet> fieldSets = new ArrayList<>();
     private final JavaWriter writer;
+    private final SparrowhawkSettings settings;
 
     StructureGenerator(
         Shape shape,
@@ -69,10 +95,10 @@ public final class StructureGenerator implements Runnable {
         this.shape = shape;
         this.model = model;
         this.symbolProvider = symbolProvider;
-        this.settings = settings;
         this.symbol = symbolProvider.toSymbol(shape);
         this.writer = writer;
         this.index = SparrowhawkIndex.of(model);
+        this.settings = settings;
     }
 
     public Shape getShape() {
@@ -104,6 +130,8 @@ public final class StructureGenerator implements Runnable {
         writer.write("public final class $L implements $T {", symbol.getName(), CommonSymbols.SparrowhawkObject);
         writer.popState();
         writer.indent();
+        writer.pushState();
+        writer.putContext(DEFAULT_REFERENCES);
         for (int i = 0; i < index.getVarintFieldSetCount(shape); i++) {
             generateFields(index.getVarintMembers(shape, i), i);
         }
@@ -120,6 +148,7 @@ public final class StructureGenerator implements Runnable {
         generateEncoder();
         generateDecoder();
         generateEquals();
+        writer.popState();
         writer.injectSection(new EndClassSection(this));
         writer.dedent().write("}");
     }
@@ -143,15 +172,23 @@ public final class StructureGenerator implements Runnable {
             required = required | 0b100;
         }
 
-        writer.write(
-            "private static final long REQUIRED_$L_$L = $L;",
-            fieldType.uppercaseId,
-            secIdx,
-            bitsToString(required)
-        );
+        writer.pushState();
+        var requiredFields = "REQUIRED_" + fieldType.uppercaseId + "_" + secIdx;
+        writer.putContext("requiredFields", requiredFields);
+        writer.write("private static final long ${requiredFields:L} = $L;", bitsToString(required));
+
+        // number of unknown fields is 64 - number of known fields - 3 bits for type
+        var unknown = fields.size() == 61 ? 0 : -1L << (fields.size() + 3);
+        if (unknown != 0) {
+            var unknownMask = "UNKNOWN_MASK_" + fieldType.uppercaseId + "_" + secIdx;
+            writer.putContext("unknownMask", unknownMask);
+            writer.write("private static final long ${unknownMask:L} = $L;", bitsToString(unknown));
+        }
+
         var fieldsetName = "$" + fieldType.lowercaseId + "_" + secIdx;
+        writer.putContext("fieldsetName", fieldsetName);
         fieldSets.add(new FieldSet(fieldsetName, fieldType, secIdx));
-        writer.write("private long $L = REQUIRED_$L_$L;", fieldsetName, fieldType.uppercaseId, secIdx);
+        writer.write("private long ${fieldsetName:L} = ${requiredFields:L};");
 
         for (MemberShape field : fields) {
             generateField(field, fieldsetName);
@@ -174,6 +211,10 @@ public final class StructureGenerator implements Runnable {
         var toggleFieldName = "FIELD_" + upperCase(field.getId().getMember().get());
         var trait = field.expectTrait(SparrowhawkFieldTrait.class);
 
+        writer.pushState();
+        writer.putContext("fieldName", fieldName);
+        writer.putContext("fieldSymbol", fieldSymbol);
+
         var bit = 1L << ((trait.getTypeIdx() - 1) + 3);
         writer.write(
             "// $L fieldSet $L index $L",
@@ -191,53 +232,88 @@ public final class StructureGenerator implements Runnable {
 
         writer.openBlock("\npublic $T get$L() {", "}\n", fieldSymbol, methodName, () -> {
             var target = model.expectShape(field.getTarget());
+            writer.pushState();
             if (isString(target)) {
-                writer.openBlock("if ($L == null) {", "}", fieldName, () -> {
-                    writer.write("return null;");
-                });
-                writer.openBlock("if ($L instanceof String) {", "}", fieldName, () -> {
-                    writer.write("return (String) $L;", fieldName);
-                });
                 writer.write("""
-                    String s = new String((byte[]) $1L, $2T);
-                    this.$1L = s;
-                    return s;""", fieldName, CommonSymbols.UTF_8);
+                    if (${fieldName:L} == null) {
+                        return null;
+                    }
+                    if (${fieldName:L} instanceof String) {
+                        return (String) ${fieldName:L};
+                    }
+                    String s = new String((byte[]) ${fieldName:L}, ${uTF_8:T});
+                    this.${fieldName:L} = s;
+                    return s;""");
+            } else if (isBigInteger(target)) {
+                writer.putContext("bigInteger", imp("java.math", "BigInteger"));
+                writer.write("""
+                    if (${fieldName:L} == null) {
+                        return null;
+                    }
+                    if (${fieldName:L} instanceof ${bigInteger:T}) {
+                        return (${bigInteger:T}) ${fieldName:L};
+                    }
+                    ${bigInteger:T} bi = new ${bigInteger:T}((byte[]) ${fieldName:L});
+                    this.${fieldName:L} = bi;
+                    return bi;""");
+            } else if (target.isBigDecimalShape()) {
+                writer.putContext("bigDecimal", imp("java.math", "BigDecimal"));
+                writer.write("""
+                    if (${fieldName:L} == null) {
+                        return null;
+                    }
+                    if (${fieldName:L} instanceof ${sparrowhawkBigDecimalHolder:T}) {
+                        ${bigDecimal:T} bd = ((${sparrowhawkBigDecimalHolder:T}) ${fieldName:L}).toBigDecimal();
+                        ${fieldName:L} = bd;
+                        return bd;
+                    }
+                    return (${bigDecimal:T}) ${fieldName:L};""");
             } else if (target.isMapShape()) {
                 var sparrowhawkCollectionSymbol = fieldSymbol.expectProperty(
                     "sparrowhawkCollection",
                     SymbolReference.class
                 );
-                writer.write("""
-                    Object field = $L;
-                    if (field == null) return null;""", fieldName);
-                writer.openBlock("if (field.getClass() == $T.class) {", "}", sparrowhawkCollectionSymbol, () -> {
-                    writer.write("""
-                        $T m = (($T) field).toMap();
-                        this.$L = m;
-                        return m;""", fieldSymbol, sparrowhawkCollectionSymbol, fieldName);
-                });
-                writer.write("return ($T) $L;", fieldSymbol, fieldName);
+                setupSparrowhawkCollectionConstructor(fieldSymbol);
+                writer.putContext("sparrowhawkCollection", sparrowhawkCollectionSymbol);
+                writer.write(
+                    """
+                        Object field = ${fieldName:L};
+                        if (field == null) return null;
+                        if (field.getClass() == ${sparrowhawkCollection:T}.class) {
+                            ${fieldSymbol:T} m = ((${sparrowhawkCollection:T}) field).to${?nestingLevel}Nested${/nestingLevel}Map(${?nestingLevel}${nestingLevel:L}${/nestingLevel});
+                            this.${fieldName:L} = m;
+                            return m;
+                        }
+                        return (${fieldSymbol:T}) ${fieldName:L};"""
+                );
             } else if (target.isListShape()) {
                 var valueSymbol = listTarget(model.expectShape(field.getTarget()));
                 var valueType = valueSymbol.expectProperty("shape", Shape.class);
-                if (isString(valueType)) {
-                    var implType = isSparse(field) ? SparseStringList : StringList;
+
+                var listImplTypeOpt = fieldSymbol.getProperty("listImplType");
+                if (listImplTypeOpt.isPresent()) {
+                    writer.putContext("listImplType", listImplTypeOpt.get());
+                    writer.putContext("value", fieldSymbol.expectProperty("value"));
+                    writer.putContext("simple", fieldSymbol.expectProperty("simple"));
                     writer.write("""
-                        Object field = $L;
-                        if (field == null) return null;""", fieldName);
-                    writer.openBlock("if (field.getClass() == $T.class) {", "}", implType, () -> {
-                        writer.write("""
-                            List<String> m = (($T) field).toList();
-                            this.$L = m;
-                            return m;""", implType, fieldName);
-                    });
-                    writer.write("return (List<String>) $L;", fieldName);
+                        Object field = ${fieldName:L};
+                        if (field == null) return null;
+                        if (field.getClass() == ${listImplType:T}.class) {${?simple}
+                            return ((${listImplType:T}) field).toList();
+                        ${/simple}${^simple}
+                            ${fieldSymbol:T} m = ((${listImplType:T}) field).toList();
+                            this.${fieldName:L} = m;
+                            return m;
+                        ${/simple}
+                        }
+                        return (${fieldSymbol:T}) field;""");
                 } else {
-                    writer.write("return $L;", fieldName);
+                    writer.write("return ${fieldName:L};");
                 }
             } else {
                 writer.write("return $L;", fieldName);
             }
+            writer.popState();
         });
 
         writer.openBlock("public void set$L($T $L) {", "}\n", methodName, fieldSymbol, fieldName, () -> {
@@ -268,6 +344,8 @@ public final class StructureGenerator implements Runnable {
         writer.openBlock("public boolean has$L() {", "}\n", methodName, () -> {
             writer.write("return ($L & $L) != 0;", fieldsetName, toggleFieldName);
         });
+
+        writer.popState();
     }
 
     private void generateSizingMethods() {
@@ -343,13 +421,15 @@ public final class StructureGenerator implements Runnable {
     private void variableSizeSizer(Stream<MemberShape> fields, Consumer<MemberShape> sizer) {
         writer.write("int size = 0;");
         fields.forEach(field -> {
-            if (isOptional(field)) {
-                writer.openBlock("if (has$L()) {", methodNameForField(field));
-            }
-            sizer.accept(field);
-            if (isOptional(field)) {
-                writer.closeBlock("}");
-            }
+            writer.pushState();
+            writer.putContext("optional", isOptional(field));
+            writer.putContext("methodName", methodNameForField(field));
+            writer.putContext("sizer", writer.consumer(w -> sizer.accept(field)));
+            writer.write("""
+                ${?optional}if (has${methodName:L}()) {
+                    ${/optional}${sizer:C|}${?optional}
+                }${/optional}""");
+            writer.popState();
         });
         writer.write("return size;");
     }
@@ -367,6 +447,7 @@ public final class StructureGenerator implements Runnable {
             writer.write("int size = 0;");
             for (int i = 0; i < index.getListFieldSetCount(shape); i++) {
                 for (var field : index.getListMembers(shape, i)) {
+                    writer.pushState();
                     if (isOptional(field)) {
                         writer.openBlock("if (has$L()) {", methodNameForField(field));
                     }
@@ -374,65 +455,67 @@ public final class StructureGenerator implements Runnable {
                     var shape = model.expectShape(field.getTarget());
                     var fieldName = fieldName(field);
                     if (shape.isBlobShape()) {
-                        writer.write("size += $T($L.remaining());", byteListLengthEncodedSize, fieldName);
+                        if (shape.hasTrait(SparrowhawkObjectTrait.class)) {
+                            writer.write("size += $L.remaining();", fieldName);
+                        } else {
+                            writer.write("size += $T($L.remaining());", byteListLengthEncodedSize, fieldName);
+                        }
                     } else if (isStructure(shape)) {
                         writer.write("size += $T($L.size());", byteListLengthEncodedSize, fieldName);
                     } else {
-                        Sizer sizer = null;
+                        Sizer sizer;
                         if (shape.isListShape()) {
                             var listType = model.expectShape(
                                 ((ListShape) model.expectShape(field.getTarget())).getMember().getTarget()
                             );
-                            switch (listType.getType()) {
-                                case STRING, ENUM -> sizer = new StringListSizer(field);
-                                case BYTE, SHORT, INTEGER, LONG, BOOLEAN, INT_ENUM -> sizer = new VarIntListSizer(
-                                    field,
-                                    listType.getType()
-                                );
-                                case FLOAT -> writer.write(
-                                    "size += ($1L.size() * 4) + $2T($3T($1L.size()));",
-                                    fieldName,
-                                    ulongSize,
-                                    encodeFourBListLength
-                                );
-                                case DOUBLE -> writer.write(
-                                    "size += ($1L.size() * 8) + $2T($3T($1L.size()));",
-                                    fieldName,
-                                    ulongSize,
-                                    encodeEightBListLength
-                                );
-                                case STRUCTURE -> sizer = new StructureListSizer(field);
-                                default -> throw new IllegalStateException("Unexpected value: " + listType.getType());
+                            if (shape.hasTrait(SparseTrait.class)) {
+                                sizer = switch (listType.getType()) {
+                                    case STRUCTURE, UNION -> new SparseStructureListSizer(field, listType);
+                                    case BLOB -> new SparseBlobListSizer(field);
+                                    default -> new SparseListSizer(field, listType);
+                                };
+                            } else {
+                                sizer = switch (listType.getType()) {
+                                    case STRING, ENUM -> new StringListSizer(field);
+                                    case BLOB -> new BlobListSizer(field);
+                                    case BYTE, SHORT, INTEGER, LONG, BOOLEAN, INT_ENUM, FLOAT, DOUBLE, TIMESTAMP ->
+                                        new SimpleListSizer(field, listType);
+                                    case STRUCTURE, UNION -> new StructureListSizer(field);
+                                    default ->
+                                        throw new IllegalStateException("Unexpected value: " + listType.getType());
+                                };
                             }
                         } else if (isString(shape)) {
                             sizer = new StringSizer(field);
+                        } else if (isBigInteger(shape)) {
+                            sizer = new BigIntegerSizer(field);
+                        } else if (shape.isBigDecimalShape()) {
+                            sizer = new BigDecimalSizer(field);
                         } else if (shape.isMapShape()) {
                             sizer = new MapSizer(field);
                         } else {
                             throw new RuntimeException("Bad list type: " + shape.getType());
                         }
 
-                        if (sizer != null) {
-                            extraSizers.add(sizer);
-                            writer.write("size += $L();", sizer.methodName());
-                        }
+                        extraSizers.add(sizer);
+                        writer.write("size += $L();", sizer.methodName());
                     }
 
                     if (isOptional(field)) {
                         writer.closeBlock("}");
                     }
+
+                    writer.popState();
                 }
             }
 
             writer.write("return size;");
         });
 
-        for (var sizer : extraSizers) {
-            sizer.generate();
-        }
+        extraSizers.forEach(Sizer::generate);
     }
 
-    private abstract class Sizer {
+    private abstract class Sizer extends ShapeVisitor.Default<Void> {
         protected final MemberShape field;
 
         private Sizer(MemberShape field) {
@@ -440,10 +523,28 @@ public final class StructureGenerator implements Runnable {
         }
 
         String methodName() {
-            return "$" + field.getMemberName() + "Len";
+            return "$" + field.getMemberName() + "Size";
         }
 
-        abstract void generate();
+        final void generate() {
+            writer.pushState();
+            writer.putContext("fieldName", fieldName(field));
+            writer.putContext("required", isRequired(field));
+            writer.putContext("methodName", methodName());
+            writer.openBlock("""
+                private int ${methodName:L}() {${?required}
+                    if (${fieldName:L} == null) {
+                        ${missingField:T}("Required field '${fieldName:L}' is missing");
+                    }${/required}""", "}\n", this::generate0);
+            writer.popState();
+        }
+
+        abstract void generate0();
+
+        @Override
+        protected final Void getDefault(Shape shape) {
+            throw new RuntimeException(this + " does not support " + shape);
+        }
     }
 
     private final class MapSizer extends Sizer {
@@ -452,54 +553,176 @@ public final class StructureGenerator implements Runnable {
         }
 
         @Override
-        void generate() {
-            writer.openBlock("private int $L() {", "}\n", methodName(), () -> {
-                var fieldName = fieldName(field);
-                writer.write("Object field = $L;", fieldName);
-                if (isRequired(field)) {
-                    writer.openBlock("if (field == null) {", "}", () -> {
-                        writer.write(
-                            "$2T(\"Required field '$1L' is missing\");",
-                            field.getMemberName(),
-                            missingField
-                        );
-                    });
-                }
-
-                var mapSymbol = symbolProvider.toSymbol(field);
-                var sparrowhawkCollectionSymbol = mapSymbol.expectProperty(
-                    "sparrowhawkCollection",
-                    SymbolReference.class
-                );
-                var valueSymbol = mapValueTarget(model.expectShape(field.getTarget()));
-                writer.write("int size;");
-                writer.write("if (field.getClass() == $T.class) {", sparrowhawkCollectionSymbol);
-                writer.indent().write("size = (($T) field).size();", sparrowhawkCollectionSymbol);
-                writer.dedent().write("} else {");
-                writer.indent()
-                    .write(
-                        """
-                            $1T m = new $1T($2C);
-                            m.fromMap(($3T) field);
-                            this.$4L = m;
-                            size = m.size();""",
-                        sparrowhawkCollectionSymbol,
-                        writer.consumer(w -> {
-                            if (isStructure(valueSymbol.expectProperty("shape", Shape.class))) {
-                                w.writeInline("$T::new", valueSymbol);
-                            }
-                        }),
-                        mapSymbol,
-                        fieldName
+        void generate0() {
+            var mapSymbol = symbolProvider.toSymbol(field);
+            writer.putContext("mapSymbol", mapSymbol);
+            writer.putContext("byteListLengthEncodedSize", byteListLengthEncodedSize);
+            setupSparrowhawkCollectionConstructor(mapSymbol);
+            writer.write("Object field = ${fieldName:L};");
+            if (isRequired(field)) {
+                writer.openBlock("if (field == null) {", "}", () -> {
+                    writer.write(
+                        "$2T(\"Required field '$1L' is missing\");",
+                        field.getMemberName(),
+                        missingField
                     );
-                writer.dedent().write("}");
-                writer.write("return $T(size);", byteListLengthEncodedSize);
-            });
+                });
+            }
+
+            writer.write(
+                """
+                    int size;
+                    if (field.getClass() == ${sparrowhawkCollection:T}.class) {
+                        size = ((${sparrowhawkCollection:T}) field).size();
+                    } else {
+                        ${sparrowhawkCollection:T} m = new ${sparrowhawkCollection:T}(${ctor:C});
+                        m.from${?nestingLevel}Nested${/nestingLevel}Map((${mapSymbol:T}) field${?nestingLevel}, ${nestingLevel:L}, ${supp:C}${/nestingLevel});
+                        this.${fieldName:L} = m;
+                        size = m.size();
+                    }
+                    return ${byteListLengthEncodedSize:T}(size);"""
+            );
+        }
+    }
+
+    private void setupSparrowhawkCollectionConstructor(Symbol symbol) {
+        var sparrowhawkCollectionSymbol = symbol.expectProperty("sparrowhawkCollection", SymbolReference.class);
+        writer.putContext("sparrowhawkCollection", sparrowhawkCollectionSymbol);
+
+        var nestingOpt = symbol.getProperty("nesting", List.class);
+        if (nestingOpt.isPresent()) {
+            var nesting = nestingOpt.get();
+            writer.putContext("nestedCollections", nesting);
+            writer.putContext("fromNestedSupplier", symbol.expectProperty("fromNestedSupplier", List.class));
+            writer.putContext("nestingLevel", symbol.expectProperty("nestingLevel", Integer.class));
+            writer.putContext("supp", writer.consumer(w -> {
+                w.writeInline("${#fromNestedSupplier}() -> new ${value:T}(${/fromNestedSupplier}");
+                w.writeInline("${#fromNestedSupplier})${/fromNestedSupplier}");
+            }));
+            writer.putContext("ctor", writer.consumer(w -> {
+                w.writeInline("${#nestedCollections}() -> new ${value:T}(${/nestedCollections}");
+                w.writeInline("${#nestedCollections})${/nestedCollections}");
+            }));
+        } else {
+            writer.putContext("ctor", writer.consumer(w -> {
+                var valueSymbol = symbol.expectProperty("value", Symbol.class);
+                if (isStructure(valueSymbol.expectProperty("shape", Shape.class))) {
+                    w.writeInline("$T::new", valueSymbol);
+                }
+            }));
         }
     }
 
     private static boolean isString(Shape shape) {
         return shape.isStringShape() || shape.isEnumShape();
+    }
+
+    private static boolean isBigInteger(Shape shape) {
+        return shape.isBigIntegerShape();
+    }
+
+    private final class SparseListSizer extends Sizer {
+        private final Shape element;
+
+        private SparseListSizer(MemberShape field, Shape element) {
+            super(field);
+            this.element = element;
+        }
+
+        @Override
+        void generate0() {
+            writer.putContext("size", "_size");
+            writer.putContext("len", "_len");
+            var fieldSym = symbolProvider.toSymbol(field);
+            writer.putContext("listType", fieldSym);
+            writer.putContext("listImplType", fieldSym.expectProperty("listImplType"));
+            writer.write("""
+                ${listImplType:T} _list;
+                if (${fieldName:L}.getClass() == ${listImplType:T}.class) {
+                    _list = (${listImplType:T}) ${fieldName:L};
+                } else {
+                    _list = ${listImplType:T}.fromList((${listType:T}) ${fieldName:L});
+                    this.${fieldName:L} = _list;
+                }
+                return ${lenPrefixedListLengthEncodedSize:T}(_list.size(), _list.elementCount());""");
+        }
+    }
+
+    private final class SparseStructureListSizer extends Sizer {
+        private final Shape element;
+
+        private SparseStructureListSizer(MemberShape field, Shape element) {
+            super(field);
+            this.element = element;
+        }
+
+        @Override
+        void generate0() {
+            writer.write("return ${sparrowhawkSerializer:T}.sparseObjectListSize(${fieldName:L});");
+        }
+    }
+
+    private final class SparseBlobListSizer extends Sizer {
+        private SparseBlobListSizer(MemberShape field) {
+            super(field);
+        }
+
+        @Override
+        void generate0() {
+            writer.write("return ${sparrowhawkSerializer:T}.sparseBlobListSize(${fieldName:L});");
+        }
+    }
+
+    private final class SimpleListSizer extends Sizer {
+        private final Shape element;
+
+        private SimpleListSizer(MemberShape field, Shape element) {
+            super(field);
+            this.element = element;
+        }
+
+        @Override
+        void generate0() {
+            writer.putContext("size", "_size");
+            writer.putContext("len", "_len");
+            writer.putContext("listLengthEncoder", switch (element.getType()) {
+                case BOOLEAN, BYTE, SHORT, INTEGER, LONG, INT_ENUM -> encodeVarintListLength;
+                case FLOAT -> encodeFourBListLength;
+                case DOUBLE, TIMESTAMP -> encodeEightBListLength;
+                default -> throw new RuntimeException("not a simple list: " + field);
+            });
+            writer.putContext("elementSizeEncoder", switch (element.getType()) {
+                case BOOLEAN, BYTE, SHORT, INTEGER, LONG, INT_ENUM -> writer.consumer(this::varint);
+                case FLOAT -> writer.consumer(this::four);
+                case DOUBLE, TIMESTAMP -> writer.consumer(this::eight);
+                default -> throw new RuntimeException("not a simple list: " + field);
+            });
+            writer.write("""
+                int ${len:L} = ${fieldName:L}.size();
+                int ${size:L} = ${uintSize:T}(${listLengthEncoder:T}(${len:L}));
+                ${elementSizeEncoder:C|}
+                return ${size:L};""");
+        }
+
+        private void varint(JavaWriter writer) {
+            writer.putContext("varintSize", switch (element.getType()) {
+                case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM -> intSize;
+                case LONG -> longSize;
+                default -> throw new RuntimeException("not a varint: " + field);
+            });
+            writer.write("""
+                for (int _i = 0; _i < ${len:L}; _i++) {
+                    ${size:L} += ${varintSize:T}(${fieldName:L}.get(_i));
+                }""");
+        }
+
+        private void four(JavaWriter writer) {
+            writer.write("${size:L} += 4 * ${len:L};");
+        }
+
+        private void eight(JavaWriter writer) {
+            writer.write("${size:L} += 8 * ${len:L};");
+        }
     }
 
     private final class StringListSizer extends Sizer {
@@ -508,32 +731,35 @@ public final class StructureGenerator implements Runnable {
         }
 
         @Override
-        void generate() {
-            writer.openBlock("private int $L() {", "}\n", methodName(), () -> {
-                var listType = isSparse(field) ? SparseStringList : StringList;
-                var fieldName = fieldName(field);
-                writer.write("Object field = $L;", fieldName);
-                if (isRequired(field)) {
-                    writer.openBlock("if (field == null) {", "}\n", () -> {
-                        writer.write(
-                            "$2T(\"Required field '$1L' is missing\");",
-                            field.getMemberName(),
-                            missingField
-                        );
-                    });
+        void generate0() {
+            writer.putContext("listType", StringList);
+            writer.write("""
+                ${listType:T} _list;
+                if (${fieldName:L}.getClass() == ${listType:T}.class) {
+                    _list = (${listType:T}) ${fieldName:L};
+                } else {
+                    _list = ${listType:T}.fromList((${list:T}<String>) ${fieldName:L});
+                    this.${fieldName:L} = _list;
                 }
-                writer.write("""
-                    $1T _list;
-                    if (field.getClass() == $1T.class) {""", listType);
-                writer.indent()
-                    .write("_list = ($T) field;", listType);
-                writer.dedent().write("} else {");
-                writer.indent().write("""
-                    _list = $1T.fromList((List<String>) field);
-                    this.$2L = _list;""", listType, fieldName);
-                writer.dedent().write("}");
-                writer.write("return $T(_list.size(), _list.elementCount());", lenPrefixedListLengthEncodedSize);
-            });
+                return ${lenPrefixedListLengthEncodedSize:T}(_list.size(), _list.elementCount());""");
+        }
+    }
+
+    private final class BlobListSizer extends Sizer {
+        private BlobListSizer(MemberShape field) {
+            super(field);
+        }
+
+        @Override
+        void generate0() {
+            writer.pushState();
+            writer.putContext("methodName", methodName());
+            writer.putContext("fieldName", fieldName(field));
+            writer.putContext("required", isRequired(field));
+            writer.write("""
+                return ${sparrowhawkSerializer:T}.blobListEncodedSize(${fieldName:L});
+                """);
+            writer.popState();
         }
     }
 
@@ -543,67 +769,63 @@ public final class StructureGenerator implements Runnable {
         }
 
         @Override
-        void generate() {
-            writer.openBlock("private int $L() {", "}\n", methodName(), () -> {
-                var fieldName = fieldName(field);
-                writer.write("Object field = $L;", fieldName);
-                if (isRequired(field)) {
-                    writer.openBlock("if (field == null) {", "}\n", () -> {
-                        writer.write(
-                            "$2T(\"Required field '$1L' is missing\");",
-                            field.getMemberName(),
-                            missingField
-                        );
-                    });
-                }
-
-                writer.write("int size;");
-                // TODO: is this faster than instanceof?
-                writer.write("if (field.getClass() == byte[].class) {");
-                writer.indent().write("size = ((byte[]) field).length;");
-                writer.dedent().write("} else {");
-                writer.indent().write("""
-                    byte[] bytes = ((String) field).getBytes($T);
-                    this.$L = bytes;
-                    size = bytes.length;""", CommonSymbols.UTF_8, fieldName);
-                writer.dedent().write("}\n");
-                writer.write("return $T(size);", byteListLengthEncodedSize);
-            });
+        void generate0() {
+            writer.write("int size;");
+            // TODO: is this faster than instanceof?
+            writer.write("if (${fieldName:L}.getClass() == byte[].class) {");
+            writer.indent().write("size = ((byte[]) ${fieldName:L}).length;");
+            writer.dedent().write("} else {");
+            writer.indent().write("""
+                byte[] bytes = ((String) ${fieldName:L}).getBytes(${uTF_8:T});
+                this.${fieldName:L} = bytes;
+                size = bytes.length;""");
+            writer.dedent().write("}\n");
+            writer.write("return $T(size);", byteListLengthEncodedSize);
         }
     }
 
-    private final class VarIntListSizer extends Sizer {
-
-        private final ShapeType innerType;
-
-        private VarIntListSizer(MemberShape field, ShapeType innerType) {
+    private final class BigIntegerSizer extends Sizer {
+        BigIntegerSizer(MemberShape field) {
             super(field);
-            this.innerType = innerType;
         }
 
         @Override
-        void generate() {
-            writer.openBlock("private int $L() {", "}\n", methodName(), () -> {
-                var fieldName = fieldName(field);
-                if (isRequired(field)) {
-                    writer.openBlock("if ($L == null) {", "}\n", fieldName, () -> {
-                        writer.write(
-                            "$2T(\"Required field '$1L' is missing\");",
-                            field.getMemberName(),
-                            missingField
-                        );
-                    });
-                }
+        void generate0() {
+            writer.pushState();
+            writer.putContext("bigInteger", imp("java.math", "BigInteger"));
+            writer.write("int size;");
+            writer.write("if (${fieldName:L}.getClass() == byte[].class) {");
+            writer.indent().write("size = ((byte[]) ${fieldName:L}).length;");
+            writer.dedent().write("} else {");
+            writer.indent().write("""
+                byte[] bytes = ((${bigInteger:T}) ${fieldName:L}).toByteArray();
+                this.${fieldName:L} = bytes;
+                size = bytes.length;""");
+            writer.dedent().write("}\n");
+            writer.write("return $T(size);", byteListLengthEncodedSize);
+            writer.popState();
+        }
+    }
 
-                SymbolReference sizingMethod = innerType == LONG ? longSize : intSize;
-                writer.write("int size = 0;");
-                writer.write("int len = $L.size();", fieldName);
-                writer.write("for (int i = 0; i < len; i++) {");
-                writer.indent().write("size += $T($L.get(i));", sizingMethod, fieldName);
-                writer.dedent().write("}");
-                writer.write("size += $T($T(len));", uintSize, encodeVarintListLength);
-                writer.write("return size;");
-            });
+    private final class BigDecimalSizer extends Sizer {
+        BigDecimalSizer(MemberShape field) {
+            super(field);
+        }
+
+        @Override
+        void generate0() {
+            writer.pushState();
+            writer.putContext("bigDecimal", imp("java.math", "BigDecimal"));
+            writer.write("""
+                ${sparrowhawkBigDecimalHolder:T} holder;
+                if (${fieldName:L}.getClass() == ${bigDecimal:T}.class) {
+                    holder = new ${sparrowhawkBigDecimalHolder:T}((${bigDecimal:T}) ${fieldName:L});
+                    ${fieldName:L} = holder;
+                } else {
+                    holder = (${sparrowhawkBigDecimalHolder:T}) ${fieldName:L};
+                }
+                return ${byteListLengthEncodedSize:T}(holder.size());""");
+            writer.popState();
         }
     }
 
@@ -613,32 +835,15 @@ public final class StructureGenerator implements Runnable {
         }
 
         @Override
-        void generate() {
-            writer.openBlock("private int $L() {", "}\n", methodName(), () -> {
-                var fieldName = fieldName(field);
-                if (isRequired(field)) {
-                    writer.openBlock("if ($L == null) {", "}\n", fieldName, () -> {
-                        writer.write(
-                            "$T(\"Required field '$L' is missing\");",
-                            missingField,
-                            field.getMemberName()
-                        );
-                    });
+        void generate0() {
+            writer.write("""
+                int len = ${fieldName:L}.size();
+                int size = ${uintSize:T}(${encodeLenPrefixedListLength:T}(len));
+                for (int i = 0; i < len; i++) {
+                    size += ${byteListLengthEncodedSize:T}(${fieldName:L}.get(i).size());
                 }
-
-                writer.write("int size = 0;");
-                writer.write("int len = $L.size();", fieldName);
-                writer.write("for (int i = 0; i < len; i++) {");
-                writer.indent().write("size += $T($L.get(i).size());", byteListLengthEncodedSize, fieldName);
-                writer.dedent().write("}");
-                writer.write("size += $T($T(len));", uintSize, encodeLenPrefixedListLength);
-                writer.write("return size;");
-            });
+                return size;""");
         }
-    }
-
-    public Symbol mapValueTarget(Shape map) {
-        return symbolProvider.toSymbol(map).expectProperty("value", Symbol.class);
     }
 
     public Symbol listTarget(Shape shape) {
@@ -646,6 +851,7 @@ public final class StructureGenerator implements Runnable {
     }
 
     private void fixedSizeSizer(Stream<MemberShape> fields, int scale) {
+        // TODO: this can be calculated as just `return scale * bitCount(fieldSet >> 3);`
         var optionalFields = new ArrayList<MemberShape>();
         var requiredFields = new ArrayList<MemberShape>();
         fields.forEach(f -> {
@@ -720,46 +926,63 @@ public final class StructureGenerator implements Runnable {
                         }
                         var listFields = index.getListMembers(shape, fieldSetIdx);
                         for (int i = 0; i < listFields.size(); i++) {
+                            writer.pushState();
                             var field = listFields.get(i);
                             var fieldName = fieldName(field);
+                            writer.putContext("fieldName", fieldName);
                             if (isOptional(field)) {
                                 writer.openBlock("if (has$L()) {", methodNameForField(field));
                             }
 
                             var fieldSymbol = symbolProvider.toSymbol(field);
                             var target = model.expectShape(field.getTarget());
-                            if (isString(target)) {
-                                writer.write("s.writeBytes($L);", fieldName);
+                            if (isString(target) || isBigInteger(target)) {
+                                writer.write("s.writeBytes(${fieldName:L});");
+                            } else if (target.isBigDecimalShape()) {
+                                writer.write("s.writeBigDecimal(${fieldName:L});");
                             } else if (target.isBlobShape()) {
-                                writer.write("s.writeBytes($L);", fieldName);
+                                writer.putContext(
+                                    "writeBlob",
+                                    target.hasTrait(SparrowhawkObjectTrait.class) ? "writeEncodedObject" : "writeBytes"
+                                );
+                                writer.write("s.${writeBlob:L}(${fieldName:L});");
                             } else if (target.isMapShape()) {
                                 writer.write(
-                                    "(($T) $L).encodeTo(s);",
-                                    fieldSymbol.expectProperty("sparrowhawkCollection", SymbolReference.class),
-                                    fieldName
+                                    "(($T) ${fieldName:L}).encodeTo(s);",
+                                    fieldSymbol.expectProperty("sparrowhawkCollection", SymbolReference.class)
                                 );
                             } else if (target.isListShape()) {
                                 var valueType = listTarget(target);
                                 var valueShape = valueType.expectProperty("shape", Shape.class);
-                                if (isString(valueShape)) {
-                                    var listType = isSparse(field) ? SparseStringList : StringList;
-                                    writer.write("(($T) $L).encodeTo(s);", listType, fieldName);
-                                } else if (isVarintShape(valueShape) || valueShape.isDoubleShape() || valueShape
+                                if (isSparse(field)) {
+                                    if (isStructure(valueShape)) {
+                                        writer.write("s.writeSparseObjectList(${fieldName:L});");
+                                    } else if (valueShape.isBlobShape()) {
+                                        writer.write("s.writeSparseBlobList(${fieldName:L});");
+                                    } else {
+                                        writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
+                                        writer.write("((${listImplType:T}) ${fieldName:L}).encodeTo(s);");
+                                    }
+                                } else if (isString(valueShape)) {
+                                    writer.write("(($T) ${fieldName:L}).encodeTo(s);", StringList);
+                                } else if (isVarintShape(valueShape) || isDoubleShape(valueShape) || valueShape
                                     .isFloatShape()) {
-                                        writer.write("s.write$TList($L);", valueType, fieldName);
+                                        writer.write("s.write$TList(${fieldName:L});", valueType);
                                     } else if (isStructure(valueShape)) {
                                         writer.write(
                                             "s.writeVarUL(encodeLenPrefixedListLength($L.size()));",
                                             fieldName
                                         );
-                                        writer.write("for(int i = 0; i < $L.size(); i++) {", fieldName);
-                                        writer.indent().write("$L.get(i).encodeTo(s);", fieldName);
+                                        writer.write("for(int i = 0; i < ${fieldName:L}.size(); i++) {");
+                                        writer.indent().write("${fieldName:L}.get(i).encodeTo(s);");
                                         writer.dedent().write("}");
+                                    } else if (valueShape.isBlobShape()) {
+                                        writer.write("s.writeBlobList(${fieldName:L});");
                                     } else {
                                         throw new RuntimeException("no list encoder for: " + field);
                                     }
                             } else if (isStructure(target)) {
-                                writer.write("$L.encodeTo(s);", fieldName);
+                                writer.write("${fieldName:L}.encodeTo(s);");
                             } else {
                                 throw new RuntimeException("unsupported list encoder: " + field);
                             }
@@ -770,6 +993,7 @@ public final class StructureGenerator implements Runnable {
                                     writer.write("");
                                 }
                             }
+                            writer.popState();
                         }
                     }
                 );
@@ -838,7 +1062,7 @@ public final class StructureGenerator implements Runnable {
                                 }
                                 String m = method;
                                 if (model.expectShape(field.getTarget()).isTimestampShape()) {
-                                    m = settings.useInstant() ? "Instant" : "Date";
+                                    m = "Date";
                                 }
                                 writer.write("s.write$L($L);", m, fieldName(field));
                                 if (isOptional(field)) {
@@ -874,53 +1098,45 @@ public final class StructureGenerator implements Runnable {
     private void generateDecoder() {
         generateMethod("public void decodeFrom($T d)", CommonSymbols.SparrowhawkDeserializer, this::generateDecodeFrom);
         if (index.hasVarintMembers(shape)) {
+            generateMethod(
+                "private void decodeVarintFieldSet($T d, int fieldSetIdx, long fieldSet)",
+                CommonSymbols.SparrowhawkDeserializer,
+                this::emitVarintDecodeMethod
+            );
             int varintFieldSetCount = index.getVarintFieldSetCount(shape);
-            if (varintFieldSetCount > 1) {
-                generateMethod(
-                    "private void decodeVarintFieldSet($T d, int fieldSetIdx, long fieldSet)",
-                    CommonSymbols.SparrowhawkDeserializer,
-                    this::emitVarintDecodeMethod
-                );
-            }
             for (int i = 0; i < varintFieldSetCount; i++) {
                 writeVarintFieldsetDecode(i, index.getVarintMembers(shape, i));
             }
         }
         if (index.hasFourByteMembers(shape)) {
+            generateMethod(
+                "private void decodeFourByteFieldSet($T d, int fieldSetIdx, long fieldSet)",
+                CommonSymbols.SparrowhawkDeserializer,
+                this::emitFourByteDecodeMethod
+            );
             int fourByteFieldSetCount = index.getFourByteFieldSetCount(shape);
-            if (fourByteFieldSetCount > 1) {
-                generateMethod(
-                    "private void decodeFourByteFieldSet($T d, int fieldSetIdx, long fieldSet)",
-                    CommonSymbols.SparrowhawkDeserializer,
-                    this::emitFourByteDecodeMethod
-                );
-            }
             for (int i = 0; i < fourByteFieldSetCount; i++) {
                 emitFourByteFieldSetDecoderMethod(i);
             }
         }
         if (index.hasEightByteMembers(shape)) {
+            generateMethod(
+                "private void decodeEightByteFieldSet($T d, int fieldSetIdx, long fieldSet)",
+                CommonSymbols.SparrowhawkDeserializer,
+                this::emitEightByteDecodeMethod
+            );
             int eightByteFieldSetCount = index.getEightByteFieldSetCount(shape);
-            if (eightByteFieldSetCount > 1) {
-                generateMethod(
-                    "private void decodeEightByteFieldSet($T d, int fieldSetIdx, long fieldSet)",
-                    CommonSymbols.SparrowhawkDeserializer,
-                    this::emitEightByteDecodeMethod
-                );
-            }
             for (int i = 0; i < eightByteFieldSetCount; i++) {
                 emitEightByteFieldSetDecoderMethod(i);
             }
         }
         if (index.hasListMembers(shape)) {
+            generateMethod(
+                "private void decodeListFieldSet($T d, int fieldSetIdx, long fieldSet)",
+                CommonSymbols.SparrowhawkDeserializer,
+                this::emitListDecodeMethod
+            );
             int listFieldSetCount = index.getListFieldSetCount(shape);
-            if (listFieldSetCount > 1) {
-                generateMethod(
-                    "private void decodeListFieldSet($T d, int fieldSetIdx, long fieldSet)",
-                    CommonSymbols.SparrowhawkDeserializer,
-                    this::emitListDecodeMethod
-                );
-            }
             for (int i = 0; i < listFieldSetCount; i++) {
                 emitListFieldSetDecoderMethod(i);
             }
@@ -935,7 +1151,8 @@ public final class StructureGenerator implements Runnable {
 
     private void emitVarintDecodeMethod() {
         writer.openBlock("switch (fieldSetIdx) {", """
-                default: throw new IllegalArgumentException("Unknown fieldSet index " + fieldSetIdx);
+                default: d.skipAllVarints(fieldSet);
+                    break;
             }""", () -> {
             for (int i = 0; i < index.getVarintFieldSetCount(shape); i++) {
                 int fieldSetIdx = i;
@@ -950,11 +1167,11 @@ public final class StructureGenerator implements Runnable {
     }
 
     private void writeVarintFieldsetDecode(int fieldSetIdx, List<MemberShape> varintMembers) {
+        writer.pushState();
+        writer.putContext("fieldSetIdx", fieldSetIdx);
         writer.openBlock(
-            "private void decodeVarintFieldSet$L($T d, long fieldSet) {",
+            "private void decodeVarintFieldSet${fieldSetIdx:L}(${sparrowhawkDeserializer:T} d, long fieldSet) {",
             "}\n",
-            fieldSetIdx,
-            CommonSymbols.SparrowhawkDeserializer,
             () -> {
                 emitDecoderPrelude("$varint_" + fieldSetIdx, "REQUIRED_VARINT_" + fieldSetIdx, "varint");
                 for (var field : varintMembers) {
@@ -966,8 +1183,12 @@ public final class StructureGenerator implements Runnable {
                         writer.closeBlock("}");
                     }
                 }
+                if (varintMembers.size() < 61) {
+                    writer.write("d.skipRemainingVarints(fieldSet, UNKNOWN_MASK_VARINT_${fieldSetIdx:L});");
+                }
             }
         );
+        writer.popState();
     }
 
     public boolean isOptional(MemberShape field) {
@@ -983,19 +1204,22 @@ public final class StructureGenerator implements Runnable {
         String width,
         int fieldSetCount
     ) {
+        writer.pushState();
+        writer.putContext("decoderType", capitalize(width));
         writer.openBlock("switch (fieldSetIdx) {", """
-                default: throw new IllegalArgumentException("Unknown fieldSet index " + fieldSetIdx);
+                default: d.skipAll${decoderType:L}s(fieldSet);
+                    break;
             }""", () -> {
             for (int i = 0; i < fieldSetCount; i++) {
-                int fieldSetIdx = i;
+                writer.putContext("idx", i);
                 writer.openBlock(
-                    "case $L:",
+                    "case ${idx:L}:",
                     "    break;",
-                    fieldSetIdx,
-                    () -> writer.write("decode$LByteFieldSet$L(d, fieldSet);", capitalize(width), fieldSetIdx)
+                    () -> writer.write("decode${decoderType:L}ByteFieldSet${idx:L}(d, fieldSet);")
                 );
             }
         });
+        writer.popState();
     }
 
     private void emitFixedWidthFieldSetDecoder(
@@ -1004,12 +1228,13 @@ public final class StructureGenerator implements Runnable {
         int fieldSetIdx,
         List<MemberShape> fields
     ) {
+        writer.pushState();
+        writer.putContext("fieldSetIdx", fieldSetIdx);
+        writer.putContext("decoderType", capitalize(width));
+        writer.putContext("decoderCap", upperCase(width));
         writer.openBlock(
-            "private void decode$LByteFieldSet$L($T d, long fieldSet) {",
+            "private void decode${decoderType:L}ByteFieldSet${fieldSetIdx:L}(${sparrowhawkDeserializer:T} d, long fieldSet) {",
             "}\n",
-            capitalize(width),
-            fieldSetIdx,
-            CommonSymbols.SparrowhawkDeserializer,
             () -> {
                 emitDecoderPrelude(
                     "$" + width + "Byte_" + fieldSetIdx,
@@ -1022,15 +1247,21 @@ public final class StructureGenerator implements Runnable {
                     }
                     String m = method;
                     if (model.expectShape(field.getTarget()).isTimestampShape()) {
-                        m = settings.useInstant() ? "instant" : "date";
+                        m = "date";
                     }
                     writer.write("this.$L = d.$L();", fieldName(field), m);
                     if (isOptional(field)) {
                         writer.closeBlock("}");
                     }
                 }
+                if (fields.size() < 61) {
+                    writer.write(
+                        "d.skipRemaining${decoderType:L}s(fieldSet, UNKNOWN_MASK_${decoderCap:L}_BYTE_${fieldSetIdx:L});"
+                    );
+                }
             }
         );
+        writer.popState();
     }
 
     private void emitFourByteDecodeMethod() {
@@ -1051,7 +1282,8 @@ public final class StructureGenerator implements Runnable {
 
     private void emitListDecodeMethod() {
         writer.openBlock("switch (fieldSetIdx) {", """
-                default: throw new IllegalArgumentException("Unknown fieldSet index " + fieldSetIdx);
+                default: d.skipAllLists(fieldSet);
+                    break;
             }""", () -> {
             for (int i = 0; i < index.getListFieldSetCount(shape); i++) {
                 int fieldSetIdx = i;
@@ -1063,16 +1295,15 @@ public final class StructureGenerator implements Runnable {
                 );
             }
         });
-
     }
 
     private void emitListFieldSetDecoderMethod(int fieldSetIdx) {
+        writer.pushState();
+        writer.putContext("fieldSetIdx", fieldSetIdx);
         writer.openBlock(
-            "private void decodeListFieldSet$L($T d, long fieldSet) {",
+            "private void decodeListFieldSet${fieldSetIdx:L}(${sparrowhawkDeserializer:T} d, long fieldSet) {",
             "}\n",
-            fieldSetIdx,
-            CommonSymbols.SparrowhawkDeserializer,
-            () -> {//TODO: check the sublist, not all lists
+            () -> { //TODO: check the sublist, not all lists
                 if (index.hasRequiredLists(shape)) {
                     writer.write(
                         "$T.checkFields(fieldSet, REQUIRED_LIST_$L, \"lists\");",
@@ -1081,7 +1312,9 @@ public final class StructureGenerator implements Runnable {
                     );
                 }
                 writer.write("this.$$list_$L = fieldSet;", fieldSetIdx);
-                for (var field : index.getListMembers(shape, fieldSetIdx)) {
+                List<MemberShape> listMembers = index.getListMembers(shape, fieldSetIdx);
+                for (var field : listMembers) {
+                    writer.pushState();
                     if (isOptional(field)) {
                         writer.openBlock("if (has$L()) {", methodNameForField(field));
                     } else {
@@ -1089,65 +1322,96 @@ public final class StructureGenerator implements Runnable {
                     }
 
                     var fieldSymbol = symbolProvider.toSymbol(field);
-                    var shape = model.expectShape(field.getTarget());
                     var fieldName = fieldName(field);
+                    writer.putContext("fieldName", fieldName);
+                    writer.putContext("fieldSymbol", fieldSymbol);
+
+                    var shape = model.expectShape(field.getTarget());
                     if (shape.isBlobShape()) {
-                        writer.write("this.$L = d.bytes();", fieldName);
-                    } else if (isString(shape)) {
-                        writer.write("this.$L = d.string();", fieldName);
-                    } else if (shape.isMapShape()) {
-                        var valueSymbol = mapValueTarget(model.expectShape(field.getTarget()));
-                        writer.write(
-                            """
-                                $1T m = new $1T($2C);
-                                m.decodeFrom(d);
-                                this.$3L = m;""",
-                            fieldSymbol.expectProperty("sparrowhawkCollection", SymbolReference.class),
-                            writer.consumer(w -> {
-                                if (isStructure(valueSymbol.expectProperty("shape", Shape.class))) {
-                                    w.writeInline("$T::new", valueSymbol);
-                                }
-                            }),
-                            fieldName
+                        writer.putContext(
+                            "blobMethod",
+                            shape.hasTrait(SparrowhawkObjectTrait.class)
+                                ? "object"
+                                : settings.zeroCopyBuffers() ? "bytes" : "bytesCopied"
                         );
+                        writer.write("this.${fieldName:L} = d.${blobMethod:L}();");
+                    } else if (isString(shape)) {
+                        writer.write("this.${fieldName:L} = d.string();");
+                    } else if (isBigInteger(shape)) {
+                        writer.write("this.${fieldName:L} = d.bigInteger();");
+                    } else if (shape.isBigDecimalShape()) {
+                        writer.write("this.${fieldName:L} = d.bigDecimal();");
+                    } else if (shape.isMapShape()) {
+                        setupSparrowhawkCollectionConstructor(fieldSymbol);
+                        writer.write("""
+                            ${sparrowhawkCollection:T} m = new ${sparrowhawkCollection:T}(${ctor:C});
+                            m.decodeFrom(d);
+                            this.${fieldName:L} = m;""");
                     } else if (shape.isListShape()) {
                         var valueSymbol = listTarget(model.expectShape(field.getTarget()));
                         var valueType = valueSymbol.expectProperty("shape", Shape.class);
-                        if (isString(valueType)) {
-                            var listType = isSparse(field) ? SparseStringList : StringList;
+                        writer.putContext("valueSymbol", valueSymbol);
+                        if (isSparse(field)) {
+                            if (isStructure(valueType)) {
+                                writer.write("this.${fieldName:L} = d.decodeSparseObjectList(${valueSymbol:T}::new);");
+                            } else if (valueType.isBlobShape()) {
+                                writer.putContext("zeroCopy", settings.zeroCopyBuffers());
+                                writer.write(
+                                    "this.${fieldName:L} = d.decode${^zeroCopy}Copied${/zeroCopy}SparseBlobList();"
+                                );
+                            } else {
+                                writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
+                                writer.write("""
+                                    ${listImplType:T} _l = new ${listImplType:T}();
+                                    _l.decodeFrom(d);
+                                    this.${fieldName:L} = _l;""");
+                            }
+                        } else if (isString(valueType)) {
                             writer.write("""
-                                $1T l = new $1T();
+                                ${stringList:T} l = new ${stringList:T}();
                                 l.decodeFrom(d);
-                                this.$2L = l;""", listType, fieldName);
-                        } else if (isVarintShape(valueType) || valueType.isFloatShape() || valueType.isDoubleShape()) {
-                            writer.write("this.$L = d.decode$TList();", fieldName, valueSymbol);
+                                this.${fieldName:L} = l;""");
+                        } else if (isVarintShape(valueType) || valueType.isFloatShape() || isDoubleShape(valueType)) {
+                            writer.write("this.${fieldName:L} = d.decode${valueSymbol:T}List();");
+                        } else if (valueType.isBlobShape()) {
+                            writer.putContext("zeroCopy", settings.zeroCopyBuffers());
+                            writer.write(
+                                "this.${fieldName:L} = d.decode${^zeroCopy}Copied${/zeroCopy}${byteBuffer:T}List();"
+                            );
                         } else if (isStructure(valueType)) {
-                            var temporaryArrayName = String.format("%sArr", fieldName);
-                            writer.write("int $LLen = $T(d.varUL());", fieldName, decodeLenPrefixedListLengthChecked);
-                            writer.write("$1T[] $2L = new $1T[$3LLen];", valueSymbol, temporaryArrayName, fieldName);
-                            writer.write("for (int i = 0; i < $LLen; i++) {", fieldName);
-                            writer.indent().write("$1T x = new $1T();", valueSymbol);
-                            writer.write("x.decodeFrom(d);");
-                            writer.write("$L[i] = x;", temporaryArrayName);
-                            writer.dedent().write("}");
-                            writer.write("this.$L = $T($L);", fieldName, asList, temporaryArrayName);
+                            var arrayName = String.format("%sArr", fieldName);
+                            writer.putContext("arrayName", arrayName);
+                            writer.write("""
+                                int ${fieldName:L}Len = ${decodeLenPrefixedListLengthChecked:T}(d.varUL());
+                                ${valueSymbol:T}[] ${arrayName:L} = new ${valueSymbol:T}[${fieldName:L}Len];
+                                for (int i = 0; i < ${fieldName:L}Len; i++) {
+                                    ${valueSymbol:T} x = new ${valueSymbol:T}();
+                                    x.decodeFrom(d);
+                                    ${arrayName:L}[i] = x;
+                                }
+                                this.${fieldName:L} = ${asList:T}(${arrayName:L});""");
                         } else {
                             throw new RuntimeException("can't handle: " + field);
                         }
                     } else if (isStructure(shape)) {
                         writer.write("""
-                            $1T obj = new $1T();
+                            ${fieldSymbol:T} obj = new ${fieldSymbol:T}();
                             obj.decodeFrom(d);
-                            this.$2L = obj;""", fieldSymbol, fieldName);
+                            this.${fieldName:L} = obj;""");
                     } else {
                         throw new RuntimeException("no decoder for: " + field);
                     }
 
                     writer.closeBlock("}");
+                    writer.popState();
                 }
 
+                if (listMembers.size() < 61) {
+                    writer.write("d.skipRemainingLists(fieldSet, UNKNOWN_MASK_LIST_${fieldSetIdx:L});");
+                }
             }
         );
+        writer.popState();
     }
 
     private static boolean isVarintShape(Shape type) {
@@ -1155,6 +1419,10 @@ public final class StructureGenerator implements Runnable {
             case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM, LONG -> true;
             default -> false;
         };
+    }
+
+    private static boolean isDoubleShape(Shape type) {
+        return type.getType() == DOUBLE || type.getType() == TIMESTAMP;
     }
 
     private String varintSerializeMethod(MemberShape field) {
@@ -1172,97 +1440,66 @@ public final class StructureGenerator implements Runnable {
         };
     }
 
+    private void generateTypeDecodeBranch(String methodName, SymbolReference fieldType, boolean writeElse) {
+        writer.pushState();
+        writer.putContext("fieldType", fieldType);
+        writer.putContext("methodName", methodName);
+        writer.putContext("writeElse", writeElse);
+        writer.writeInline("""
+            ${?writeElse}else ${/writeElse}if (type == ${fieldType:T}) {
+                decode${methodName:L}FieldSet(d, fieldSetIdx, fieldSet);
+            }
+            """);
+        writer.popState();
+    }
+
     private void generateDecodeFrom() {
+        writer.pushState();
         writer.openBlock("""
-            int size = (int) $T(d.varUI());
+            int size = (int) ${decodeElementCount:T}(d.varUI());
             this.$$size = size;
             int start = d.pos();
+            int end = start + size;
 
-            while ((d.pos() - start) < size) {""", "}", decodeElementCount, () -> {
+            while (d.pos()  < end) {""", "}", () -> {
             writer.write("""
                 long fieldSet = d.varUL();
                 int fieldSetIdx = ((fieldSet & 0b100) != 0) ? d.varUI() + 1 : 0;
                 int type = (int) (fieldSet & 3);""");
             int emitted = 0;
+            writer.putContext("decodeGenerator", writer.consumer(w -> {
+            }));
             if (index.hasListMembers(shape)) {
                 emitted++;
-                writer.write("if (type == $T) {", T_LIST).indent();
-                if (index.getListFieldSetCount(shape) > 1) {
-                    writer.write("decodeListFieldSet(d, fieldSetIdx, fieldSet);");
-                } else {
-                    // TODO: skip unknown fieldsets!
-                    writer.write(
-                        "if (fieldSetIdx != 0) { throw new IllegalArgumentException(\"unknown fieldSetIdx \" + fieldSetIdx); }"
-                    );
-                    writer.write("decodeListFieldSet0(d, fieldSet);");
-                }
+                generateTypeDecodeBranch("List", T_LIST, false);
             }
             if (index.hasVarintMembers(shape)) {
-                if (emitted++ > 0) {
-                    writer.dedent().writeInline("} else ");
-                }
-                writer.write("if (type == $T) {", T_VARINT).indent();
-                if (index.getVarintFieldSetCount(shape) > 1) {
-                    writer.write("decodeVarintFieldSet(d, fieldSetIdx, fieldSet);");
-                } else {
-                    // TODO: skip unknown fieldsets!
-                    writer.write(
-                        "if (fieldSetIdx != 0) { throw new IllegalArgumentException(\"unknown fieldSetIdx \" + fieldSetIdx); }"
-                    );
-                    writer.write("decodeVarintFieldSet0(d, fieldSet);");
-                }
+                generateTypeDecodeBranch("Varint", T_VARINT, emitted++ > 0);
             }
             if (index.hasFourByteMembers(shape)) {
-                if (emitted++ > 0) {
-                    writer.dedent().writeInline("} else ");
-                }
-                writer.write("if (type == $T) {", T_FOUR).indent();
-                if (index.getFourByteFieldSetCount(shape) > 1) {
-                    writer.write("decodeFourByteFieldSet(d, fieldSetIdx, fieldSet);");
-                } else {
-                    // TODO: skip unknown fieldsets!
-                    writer.write(
-                        "if (fieldSetIdx != 0) { throw new IllegalArgumentException(\"unknown fieldSetIdx \" + fieldSetIdx); }"
-                    );
-                    writer.write("decodeFourByteFieldSet0(d, fieldSet);");
-                }
+                generateTypeDecodeBranch("FourByte", T_FOUR, emitted++ > 0);
             }
             if (index.hasEightByteMembers(shape)) {
                 if (emitted++ == 3) {
-                    writer.dedent().write("} else {").indent();
+                    writer.write("""
+                        else {
+                            decodeEightByteFieldSet(d, fieldSetIdx, fieldSet);
+                        }""");
                 } else {
-                    if (emitted > 1) {
-                        writer.dedent().writeInline("} else ");
-                    }
-                    writer.write("if (type == $T) {", T_EIGHT).indent();
-                }
-                if (index.getEightByteFieldSetCount(shape) > 1) {
-                    writer.write("decodeEightByteFieldSet(d, fieldSetIdx, fieldSet);");
-                } else {
-                    // TODO: skip unknown fieldsets!
-                    writer.write(
-                        "if (fieldSetIdx != 0) { throw new IllegalArgumentException(\"unknown fieldSetIdx \" + fieldSetIdx); }"
-                    );
-                    writer.write("decodeEightByteFieldSet0(d, fieldSet);");
+                    generateTypeDecodeBranch("EightByte", T_EIGHT, emitted > 1);
                 }
             }
-            if (emitted > 0) {
-                writer.dedent();
-            }
-            if (emitted == 4) {
-                writer.write("}");
-            } else {
+            if (emitted != 4) {
                 if (emitted > 0) {
-                    writer.writeInline("}");
-                    writer.openBlock(" else {");
+                    writer.openBlock("else {");
                 }
-                writer.write("""
-                    throw new RuntimeException("Unexpected field set type: " + type);""");
+                writer.write("d.skipRemaining(fieldSet, type);");
                 if (emitted > 0) {
                     writer.closeBlock("}");
                 }
             }
         });
+        writer.popState();
     }
 
     private void generateEquals() {

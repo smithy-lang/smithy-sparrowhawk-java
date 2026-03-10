@@ -26,11 +26,11 @@ final class OptionalObject<T extends SparrowhawkObject> implements SparrowhawkOb
     }
 
     public T getItem() {
-        if (object instanceof ByteBuffer b) {
-            SparrowhawkDeserializer deserializer = new SparrowhawkDeserializer(b);
-            T obj = factory.get();
-            obj.decodeFrom(deserializer);
-            this.object = obj;
+        if (object instanceof ByteBuffer) {
+            SparrowhawkDeserializer deserializer = new SparrowhawkDeserializer((ByteBuffer) object);
+            T object = factory.get();
+            object.decodeFrom(deserializer);
+            this.object = object;
         }
         return (T) object;
     }
@@ -83,8 +83,8 @@ final class OptionalObject<T extends SparrowhawkObject> implements SparrowhawkOb
         if ($list_0 != 0x0L) {
             s.writeVarUL($list_0);
             if (hasItem()) {
-                if (object instanceof SparrowhawkObject k) {
-                    k.encodeTo(s);
+                if (object instanceof SparrowhawkObject) {
+                    ((SparrowhawkObject) object).encodeTo(s);
                 } else {
                     s.writeEncodedObject((ByteBuffer) object);
                 }
@@ -120,12 +120,11 @@ final class OptionalObject<T extends SparrowhawkObject> implements SparrowhawkOb
     @Override
     public boolean equals(Object other) {
         if (this == other) return true;
-        if (!(other instanceof OptionalObject<?> o)) return false;
-        return Objects.equals(getItem(), o.getItem());
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getItem());
+        if (!(other instanceof OptionalBlob)) return false;
+        OptionalBlob o = (OptionalBlob) other;
+        if (!Objects.equals(getItem(), o.getItem())) {
+            return false;
+        }
+        return true;
     }
 }

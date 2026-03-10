@@ -2,10 +2,13 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
+import static software.amazon.smithy.sparrowhawk.codegen.Util.isStructure;
+
 import java.io.File;
+import java.util.ArrayList;
+import java.util.function.Function;
 import software.amazon.smithy.codegen.core.CodegenException;
 import software.amazon.smithy.codegen.core.ReservedWordSymbolProvider;
 import software.amazon.smithy.codegen.core.ReservedWordsBuilder;
@@ -14,15 +17,20 @@ import software.amazon.smithy.codegen.core.SymbolProvider;
 import software.amazon.smithy.codegen.core.SymbolReference;
 import software.amazon.smithy.java.sparrowhawk.BooleanMap;
 import software.amazon.smithy.java.sparrowhawk.ByteMap;
+import software.amazon.smithy.java.sparrowhawk.BytesMap;
+import software.amazon.smithy.java.sparrowhawk.CopiedBytesMap;
 import software.amazon.smithy.java.sparrowhawk.DoubleMap;
 import software.amazon.smithy.java.sparrowhawk.FloatMap;
+import software.amazon.smithy.java.sparrowhawk.IntegerListMap;
 import software.amazon.smithy.java.sparrowhawk.IntegerMap;
 import software.amazon.smithy.java.sparrowhawk.LongMap;
 import software.amazon.smithy.java.sparrowhawk.ShortMap;
 import software.amazon.smithy.java.sparrowhawk.SparseStructureMap;
 import software.amazon.smithy.java.sparrowhawk.StringMap;
 import software.amazon.smithy.java.sparrowhawk.StructureMap;
+import software.amazon.smithy.java.sparrowhawk.TimestampMap;
 import software.amazon.smithy.model.Model;
+import software.amazon.smithy.model.knowledge.NullableIndex;
 import software.amazon.smithy.model.shapes.BigDecimalShape;
 import software.amazon.smithy.model.shapes.BigIntegerShape;
 import software.amazon.smithy.model.shapes.BlobShape;
@@ -53,16 +61,16 @@ import software.amazon.smithy.model.traits.UniqueItemsTrait;
 import software.amazon.smithy.utils.StringUtils;
 
 public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Symbol> {
-
     private final Model model;
     private final ReservedWordSymbolProvider.Escaper escaper;
     private final ServiceShape service;
-    private final SparrowhawkSettings sparrowhawkSettings;
+    private final SparrowhawkSettings settings;
+    private final NullableIndex nullableIndex;
 
-    public SparrowhawkSymbolVisitor(Model model, ServiceShape service, SparrowhawkSettings sparrowhawkSettings) {
+    public SparrowhawkSymbolVisitor(Model model, ServiceShape service, SparrowhawkSettings settings) {
         this.model = model;
         this.service = service;
-        this.sparrowhawkSettings = sparrowhawkSettings;
+        this.settings = settings;
 
         // Load reserved words from new-line delimited files.
         var reservedWords = new ReservedWordsBuilder()
@@ -77,6 +85,7 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
             .escapePredicate((shape, symbol) -> !StringUtils.isEmpty(symbol.getDefinitionFile()))
             .buildEscaper();
 
+        this.nullableIndex = NullableIndex.of(model);
     }
 
     protected final Model model() {
@@ -89,6 +98,10 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
 
     protected final ServiceShape service() {
         return service;
+    }
+
+    protected final SparrowhawkSettings settings() {
+        return settings;
     }
 
     private String escapeWord(String word) {
@@ -122,8 +135,31 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
         var valueSymbol = toSymbol(memberShape);
         Symbol.Builder b = listSymbolBuilder(shape);
         b.putProperty("value", valueSymbol).addReference(valueSymbol);
-        if (memberShape.isStringShape()) {
-            b.putProperty("sparrowhawkField", Symbol.builder().name("Object").build());
+        boolean nullable = nullableIndex.isMemberNullable(shape.getMember());
+        if (nullable || memberShape.isStringShape()) {
+            var target = model.expectShape(shape.getMember().getTarget());
+            b.putProperty("simple", switch (target.getType()) {
+                case BOOLEAN, SHORT, INTEGER, INT_ENUM, LONG, FLOAT, DOUBLE, TIMESTAMP -> true;
+                default -> false;
+            });
+            if (!nullable) {
+                b.putProperty("sparrowhawkField", Symbol.builder().name("Object").build());
+                b.putProperty("listImplType", CommonSymbols.StringList);
+            } else if (!isStructure(memberShape) && !memberShape.isBlobShape()) {
+                b.putProperty("sparrowhawkField", Symbol.builder().name("Object").build());
+                b.putProperty("listImplType", switch (memberShape.getType()) {
+                    case STRING, ENUM -> CommonSymbols.SparseStringList;
+                    case BOOLEAN -> CommonSymbols.SparseBooleanList;
+                    case BYTE -> CommonSymbols.SparseByteList;
+                    case SHORT -> CommonSymbols.SparseShortList;
+                    case INTEGER, INT_ENUM -> CommonSymbols.SparseIntegerList;
+                    case LONG -> CommonSymbols.SparseLongList;
+                    case FLOAT -> CommonSymbols.SparseFloatList;
+                    case DOUBLE -> CommonSymbols.SparseDoubleList;
+                    case TIMESTAMP -> CommonSymbols.SparseTimestampList;
+                    default -> throw new RuntimeException("unsupported sparse list member: " + shape);
+                });
+            }
         }
         return b.build();
     }
@@ -139,8 +175,9 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
     @Override
     public Symbol mapShape(MapShape shape) {
         var keySymbol = toSymbol(model.expectShape(shape.getKey().getTarget()));
-        var valueSymbol = toSymbol(model.expectShape(shape.getValue().getTarget()));
-        Class<?> sparrowhawkCollectionImpl = switch (model.expectShape(shape.getValue().getTarget()).getType()) {
+        var valueShape = model.expectShape(shape.getValue().getTarget());
+        var valueSymbol = toSymbol(valueShape);
+        Function<Shape, Class<?>> toMapType = value -> switch (value.getType()) {
             case BOOLEAN -> BooleanMap.class;
             case STRING, ENUM -> StringMap.class;
             case BYTE -> ByteMap.class;
@@ -149,30 +186,81 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
             case LONG -> LongMap.class;
             case FLOAT -> FloatMap.class;
             case DOUBLE -> DoubleMap.class;
-            case MAP, LIST, STRUCTURE, UNION -> shape.hasTrait(SparseTrait.class)
-                ? SparseStructureMap.class
-                : StructureMap.class;
-            default -> throw new IllegalArgumentException(
-                model.expectShape(shape.getValue().getTarget())
-                    .getType()
-                    .toString()
-            );
+            case MAP, STRUCTURE, UNION -> sparseMap(shape) ? SparseStructureMap.class : StructureMap.class;
+            case LIST -> {
+                var memberTargetShapeType = model.expectShape(((ListShape) value).getMember().getTarget()).getType();
+                yield switch (memberTargetShapeType) {
+                    case INTEGER, INT_ENUM -> IntegerListMap.class;
+                    default -> throw new IllegalArgumentException(
+                        "Unsupported list member target type: " + memberTargetShapeType
+                    );
+                };
+            }
+            case BLOB -> settings.zeroCopyBuffers() ? BytesMap.class : CopiedBytesMap.class;
+            case TIMESTAMP -> TimestampMap.class;
+            default -> throw new IllegalArgumentException(value.getType().toString());
         };
 
-        SymbolReference sparrowhawkCollectionSymbol = Symbol.builder()
-            .namespace(sparrowhawkCollectionImpl.getPackageName(), ".")
-            .name(sparrowhawkCollectionImpl.getSimpleName())
-            .build()
-            .toReference(null);
-        return mapSymbolBuilder(shape)
+        var sparrowhawkCollectionImpl = toMapType.apply(valueShape);
+        var sparrowhawkCollectionSymbol = sparrowhawkCollectionSymbol(sparrowhawkCollectionImpl);
+        var mapSymbol = mapSymbolBuilder(shape)
             .putProperty("key", keySymbol)
             .putProperty("value", valueSymbol)
             .putProperty("sparrowhawkField", Symbol.builder().name("Object").build())
             .putProperty("sparrowhawkCollection", sparrowhawkCollectionSymbol)
             .addReference(keySymbol)
             .addReference(valueSymbol)
-            .addReference(sparrowhawkCollectionSymbol)
-            .build();
+            .addReference(sparrowhawkCollectionSymbol);
+
+        if (valueShape.isMapShape()) {
+            var nesting = new ArrayList<SymbolReference>();
+            var supp = new ArrayList<SymbolReference>();
+            var nestingLevel = 0;
+            while (true) {
+                if (valueShape instanceof MapShape m) {
+                    nesting.add(sparrowhawkCollectionSymbol(toMapType.apply(m)));
+                    valueShape = model.expectShape(m.getValue().getTarget());
+                    nestingLevel++;
+                } else {
+                    // if we have a map<string, map<string, structure>>, then we want to
+                    // generate `new StructureMap(() -> new StructureMap(() -> new Structure()))`.
+                    // if we have a primitive in the terminal slot, then we want to generate
+                    // `new StructureMap(() -> new PrimitiveMap()). note the lower nesting.
+                    // this is because the primitive maps encode the type information for both
+                    // their keys and values, while structure maps need additional context for
+                    // the value type.
+                    if (isStructure(valueShape)) {
+                        var sym = toSymbol(valueShape).toReference(null);
+                        nesting.add(sym);
+                        supp.add(sparrowhawkCollectionSymbol(StructureMap.class));
+                        supp.add(sym);
+                    } else {
+                        var sym = sparrowhawkCollectionSymbol(toMapType.apply(valueShape));
+                        nesting.set(nesting.size() - 1, sym);
+                        supp.add(sym);
+                    }
+                    break;
+                }
+            }
+
+            mapSymbol.putProperty("nesting", nesting);
+            mapSymbol.putProperty("nestingLevel", nestingLevel);
+            mapSymbol.putProperty("fromNestedSupplier", supp);
+        }
+
+        return mapSymbol.build();
+    }
+
+    private static SymbolReference sparrowhawkCollectionSymbol(Class<?> sparrowhawkCollectionImpl) {
+        return Symbol.builder()
+            .namespace(sparrowhawkCollectionImpl.getPackageName(), ".")
+            .name(sparrowhawkCollectionImpl.getSimpleName())
+            .build()
+            .toReference(null);
+    }
+
+    private static boolean sparseMap(MapShape mapShape) {
+        return mapShape.hasTrait(SparseTrait.class);
     }
 
     protected Symbol.Builder mapSymbolBuilder(MapShape shape) {
@@ -216,12 +304,16 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
 
     @Override
     public Symbol bigIntegerShape(BigIntegerShape shape) {
-        return createSymbolBuilder(shape, "BigInteger", "java.math").build();
+        return createSymbolBuilder(shape, "BigInteger", "java.math")
+            .putProperty("sparrowhawkField", Symbol.builder().name("Object").build())
+            .build();
     }
 
     @Override
     public Symbol bigDecimalShape(BigDecimalShape shape) {
-        return createSymbolBuilder(shape, "BigDecimal", "java.math").build();
+        return createSymbolBuilder(shape, "BigDecimal", "java.math")
+            .putProperty("sparrowhawkField", Symbol.builder().name("Object").build())
+            .build();
     }
 
     @Override
@@ -246,9 +338,9 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
             .build();
     }
 
-    private String getDefaultShapeName(Shape shape) {
+    protected String getDefaultShapeName(Shape shape) {
         // Use the service-aliased name
-        return "Sparrowhawk" + StringUtils.capitalize(shape.getId().getName(service));
+        return settings.getClassPrefix() + StringUtils.capitalize(shape.getId().getName(service));
     }
 
     @Override
@@ -263,7 +355,7 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
     }
 
     protected Symbol.Builder structureSymbolBuilder(StructureShape shape) {
-        return createSymbolBuilder(shape, getDefaultShapeName(shape), shape.getId().getNamespace() + ".sparrowhawk");
+        return createSymbolBuilder(shape, getDefaultShapeName(shape), shape.getId().getNamespace());
     }
 
     @Override
@@ -278,7 +370,7 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
     }
 
     protected Symbol.Builder unionSymbolBuilder(UnionShape shape) {
-        return createSymbolBuilder(shape, getDefaultShapeName(shape), shape.getId().getNamespace() + ".sparrowhawk");
+        return createSymbolBuilder(shape, getDefaultShapeName(shape), shape.getId().getNamespace());
     }
 
     @Override
@@ -348,9 +440,6 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
 
     @Override
     public Symbol timestampShape(TimestampShape shape) {
-        if (sparrowhawkSettings.useInstant()) {
-            return createSymbolBuilder(shape, "Instant", "java.time").build();
-        }
         return createSymbolBuilder(shape, "Date", "java.util").build();
     }
 

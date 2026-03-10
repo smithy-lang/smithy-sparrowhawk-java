@@ -2,18 +2,32 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
+
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import software.amazon.smithy.codegen.core.SymbolProvider;
-import software.amazon.smithy.codegen.core.directed.*;
+import software.amazon.smithy.codegen.core.directed.CreateContextDirective;
+import software.amazon.smithy.codegen.core.directed.CreateSymbolProviderDirective;
+import software.amazon.smithy.codegen.core.directed.DirectedCodegen;
+import software.amazon.smithy.codegen.core.directed.GenerateEnumDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateErrorDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateIntEnumDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateOperationDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateServiceDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateStructureDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateUnionDirective;
+import software.amazon.smithy.codegen.core.directed.ShapeDirective;
 import software.amazon.smithy.model.Model;
 import software.amazon.smithy.model.knowledge.NullableIndex;
-import software.amazon.smithy.model.shapes.*;
+import software.amazon.smithy.model.shapes.MemberShape;
+import software.amazon.smithy.model.shapes.ServiceShape;
+import software.amazon.smithy.model.shapes.Shape;
+import software.amazon.smithy.model.shapes.StructureShape;
+import software.amazon.smithy.model.shapes.UnionShape;
 import software.amazon.smithy.model.transform.ModelTransformer;
 import software.amazon.smithy.protocol.traits.IdxTrait;
 
@@ -58,7 +72,6 @@ public final class DirectedSparrowhawkCodegen implements
     }
 
     private static void generate(ShapeDirective<? extends Shape, GenerationContext, SparrowhawkSettings> directive) {
-
         directive.context().writerDelegator().useShapeWriter(directive.shape(), writer -> {
             new StructureGenerator(
                 directive.shape(),
@@ -104,20 +117,16 @@ public final class DirectedSparrowhawkCodegen implements
 
     private static void transformMembers(Model model, Shape shape, List<MemberShape> newShapes) {
         NullableIndex idx = NullableIndex.of(model);
-        List<MemberShape> members = new ArrayList<>(shape.members());
-        if (members.isEmpty() || members.stream().noneMatch(m -> m.hasTrait(IdxTrait.class))) {
+        List<MemberShape> members = shape.members()
+            .stream()
+            .filter(m -> m.hasTrait(IdxTrait.class))
+            .sorted(Comparator.comparingInt(m -> m.getTrait(IdxTrait.class).get().getValue()))
+            .toList();
+        if (members.isEmpty()) {
             return;
         }
-        members.sort(
-            Comparator.comparingInt(
-                m -> m.getTrait(IdxTrait.class)
-                    .map(IdxTrait::getValue)
-                    .orElse(0)
-            )
-        );
 
         var membersByType = new HashMap<FieldType, List<MemberShape>>();
-
         for (MemberShape ms : members) {
             FieldType type;
             switch (model.expectShape((ms.getTarget())).getType()) {

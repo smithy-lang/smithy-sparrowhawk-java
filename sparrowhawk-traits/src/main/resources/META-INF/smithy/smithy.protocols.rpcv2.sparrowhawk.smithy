@@ -35,3 +35,9 @@ structure rpcv2Sparrowhawk {
 list StringList {
     member: String
 }
+
+
+@trait(selector: "blob")
+@internal
+@tags(["internal"])
+structure sparrowhawkObject {}

@@ -2,13 +2,24 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
-import java.util.*;
+import static java.util.Comparator.comparing;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import software.amazon.smithy.model.Model;
 import software.amazon.smithy.model.knowledge.KnowledgeIndex;
-import software.amazon.smithy.model.shapes.*;
+import software.amazon.smithy.model.shapes.MemberShape;
+import software.amazon.smithy.model.shapes.Shape;
+import software.amazon.smithy.model.shapes.ShapeId;
+import software.amazon.smithy.model.shapes.StructureShape;
+import software.amazon.smithy.model.shapes.ToShapeId;
+import software.amazon.smithy.model.shapes.UnionShape;
 import software.amazon.smithy.model.traits.StreamingTrait;
 
 public final class SparrowhawkIndex implements KnowledgeIndex {
@@ -31,20 +42,23 @@ public final class SparrowhawkIndex implements KnowledgeIndex {
     }
 
     private void index(Shape shape, Model model) {
-        List<MemberShape> members = new ArrayList<>(shape.members());
-        if (members.isEmpty() || !members.stream().findFirst().get().hasTrait(SparrowhawkFieldTrait.class)) {
+        List<MemberShape> members = shape.members()
+            .stream()
+            .filter(m -> m.hasTrait(SparrowhawkFieldTrait.class))
+            .sorted(
+                comparing((MemberShape m) -> m.expectTrait(SparrowhawkFieldTrait.class).getType())
+                    .thenComparing(m -> m.expectTrait(SparrowhawkFieldTrait.class).getFieldSetIdx())
+                    .thenComparing(m -> m.expectTrait(SparrowhawkFieldTrait.class).getTypeIdx())
+            )
+            .toList();
+
+        if (members.isEmpty()) {
             return;
         }
 
-        members.sort(
-            Comparator.comparing((MemberShape m) -> m.expectTrait(SparrowhawkFieldTrait.class).getType())
-                .thenComparing(m -> m.expectTrait(SparrowhawkFieldTrait.class).getFieldSetIdx())
-                .thenComparing(m -> m.expectTrait(SparrowhawkFieldTrait.class).getTypeIdx())
-        );
-
         for (MemberShape ms : members) {
             if (model.expectShape(ms.getTarget()).hasTrait(StreamingTrait.class)) {
-                continue;
+                throw new RuntimeException("streaming members should not have @idx traits, but one was found on " + ms);
             }
 
             SparrowhawkFieldTrait trait = ms.expectTrait(SparrowhawkFieldTrait.class);

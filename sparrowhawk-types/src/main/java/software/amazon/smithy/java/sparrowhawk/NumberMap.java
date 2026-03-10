@@ -1,12 +1,11 @@
-/*
- * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
- * SPDX-License-Identifier: Apache-2.0
- */
-
 package software.amazon.smithy.java.sparrowhawk;
 
-import static software.amazon.smithy.java.sparrowhawk.KConstants.*;
-import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.*;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.decodeElementCount;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeByteListLength;
+import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeLenPrefixedListLength;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.EMPTY_LIST_SIZE_VARINT;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.byteListLengthEncodedSize;
+import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.ulongSize;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +13,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @SuppressWarnings("unchecked")
-public abstract class NumberMap<T> implements SparrowhawkObject {
+public abstract class NumberMap<T> extends SparrowhawkMap<T> implements SparrowhawkObject {
     private static final long REQUIRED_LIST_FIELDSET_0 = KConstants.listField(0b11);
     private static final ByteBuffer[] EMPTY_KEYS = new ByteBuffer[0];
     private static final Object[] EMPTY_VALUES = new Object[0];
@@ -22,6 +21,7 @@ public abstract class NumberMap<T> implements SparrowhawkObject {
     private ByteBuffer[] keys;
     private T[] values;
 
+    @Override
     public final Map<String, T> toMap() {
         int sz = keys.length;
         Map<String, T> m = new HashMap<>(sz / 3 * 4);
@@ -35,6 +35,7 @@ public abstract class NumberMap<T> implements SparrowhawkObject {
         return new String(b.array(), b.arrayOffset() + b.position(), b.remaining(), StandardCharsets.UTF_8);
     }
 
+    @Override
     public final void fromMap(Map<String, T> map) {
         int len = map.size();
         if (len == 0) {

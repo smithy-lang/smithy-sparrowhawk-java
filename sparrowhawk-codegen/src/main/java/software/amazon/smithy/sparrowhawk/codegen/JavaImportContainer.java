@@ -2,7 +2,6 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package software.amazon.smithy.sparrowhawk.codegen;
 
 import java.util.Comparator;
@@ -16,7 +15,6 @@ import software.amazon.smithy.codegen.core.SymbolReference;
 final class JavaImportContainer implements ImportContainer {
 
     private final String packageName;
-    private final String header;
     private final Map<String, Symbol> aliasesToSymbol = new HashMap<>();
     private final Map<Symbol, String> symbolsToAlias = new TreeMap<>(
         Comparator.comparing(Symbol::getNamespace).thenComparing(Symbol::getName)
@@ -28,9 +26,8 @@ final class JavaImportContainer implements ImportContainer {
     );
 
 
-    JavaImportContainer(String packageName, String header) {
+    JavaImportContainer(String packageName) {
         this.packageName = packageName;
-        this.header = header;
     }
 
     @Override
@@ -93,13 +90,7 @@ final class JavaImportContainer implements ImportContainer {
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        if (header != null) {
-            sb.append(header);
-            sb.append('\n');
-        }
-
-        sb.append("package ")
+        StringBuilder sb = new StringBuilder("package ")
             .append(packageName)
             .append(";\n\n");
 

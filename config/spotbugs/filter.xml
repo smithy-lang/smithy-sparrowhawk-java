@@ -23,4 +23,21 @@
     <Match>
         <Bug pattern="CT_CONSTRUCTOR_THROW"/>
     </Match>
+
+    <!-- Suppress all findings for sparrowhawk-types files that use low-level serialization patterns. -->
+    <Match>
+        <Source name="BigDecimalHolder.java"/>
+    </Match>
+    <Match>
+        <Source name="SparrowhawkSerializer.java"/>
+    </Match>
+    <Match>
+        <Source name="SparrowhawkDeserializer.java"/>
+    </Match>
+    <Match>
+        <Source name="OptionalBlob.java"/>
+    </Match>
+    <Match>
+        <Source name="OptionalObject.java"/>
+    </Match>
 </FindBugsFilter>
