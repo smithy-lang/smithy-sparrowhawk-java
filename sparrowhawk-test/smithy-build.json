@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "plugins": {
+    "sparrowhawk-java-codegen": {
+      "service": "demo#DemoService"
+    }
+  }
+}

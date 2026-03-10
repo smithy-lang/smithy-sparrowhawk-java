@@ -39,7 +39,7 @@ public final class SparrowhawkObjectTrait extends AbstractTrait {
         return new ObjectNode(Collections.emptyMap(), getSourceLocation());
     }
 
-    public static final class SparrowhawkObjectProvider implements TraitService {
+    public static final class Provider implements TraitService {
         @Override
         public Trait createTrait(ShapeId target, Node value) {
             SparrowhawkObjectTrait result = new SparrowhawkObjectTrait(value.getSourceLocation());

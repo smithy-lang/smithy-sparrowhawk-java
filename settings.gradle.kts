@@ -11,3 +11,4 @@ rootProject.name = "smithy-sparrowhawk-java"
 include("sparrowhawk-codegen")
 include("sparrowhawk-types")
 include("sparrowhawk-traits")
+include("sparrowhawk-test")
