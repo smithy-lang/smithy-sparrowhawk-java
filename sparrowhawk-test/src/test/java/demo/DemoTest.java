@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.HexFormat;
 import java.util.List;
-
 import org.junit.jupiter.api.Test;
 import software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer;
 import software.amazon.smithy.model.Model;
