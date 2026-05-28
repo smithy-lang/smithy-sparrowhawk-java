@@ -27,6 +27,7 @@ import java.util.function.Supplier;
 
 public final class SparrowhawkDeserializer {
     private static final long ALL_FIELDS_UNKNOWN = -1 << 3;
+    private static final int MAX_DESERIALIZE_DEPTH = 128;
     // this should inline but if not, replace with method handles
     private static final JdkCompat JDK_COMPAT;
 
@@ -393,17 +394,20 @@ public final class SparrowhawkDeserializer {
     public void skipRemainingLists(long fieldset, long unknownFieldBitmask) {
         int unknowns = Long.bitCount(fieldset & unknownFieldBitmask);
         if (unknowns != 0) {
-            skipLengthPrefixedList(unknowns);
+            skipLengthPrefixedList(unknowns, 0);
         }
     }
 
-    private void skipLengthPrefixedList(int toSkip) {
+    private void skipLengthPrefixedList(int toSkip, int depth) {
+        if (depth > MAX_DESERIALIZE_DEPTH) {
+            throw new ParseException("Maximum nesting depth exceeded");
+        }
         for (int i = 0; i < toSkip; i++) {
-            doSkipList(varUI());
+            doSkipList(varUI(), depth);
         }
     }
 
-    private void doSkipList(int len) {
+    private void doSkipList(int len, int depth) {
         int count = decodeElementCount(len);
         switch (len & 7) {
             case KConstants.LIST_FOUR:
@@ -416,7 +420,7 @@ public final class SparrowhawkDeserializer {
                 skipVarintList(count);
                 break;
             case KConstants.LIST_LEN_DELIMITED_ITEMS:
-                skipLengthPrefixedList(count);
+                skipLengthPrefixedList(count, depth + 1);
                 break;
             default:
                 if ((len & 1) != 0) {
