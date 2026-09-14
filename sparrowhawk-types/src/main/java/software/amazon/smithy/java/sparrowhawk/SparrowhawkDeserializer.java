@@ -63,29 +63,29 @@ public final class SparrowhawkDeserializer {
     }
 
     private final byte[] b;
-    private final int len;
+    private final int end;
     private int pos;
 
     public SparrowhawkDeserializer(byte[] b) {
         this.b = b;
-        this.len = b.length;
+        this.end = b.length;
     }
 
     public SparrowhawkDeserializer(byte[] b, int off, int len) {
         this.b = b;
         this.pos = off;
-        this.len = len;
+        this.end = off + len;
     }
 
     public SparrowhawkDeserializer(ByteBuffer b) {
         if (b.hasArray()) {
             this.b = b.array();
             this.pos = b.position() + b.arrayOffset();
-            this.len = b.remaining();
+            this.end = this.pos + b.remaining();
         } else {
             byte[] bytes = bytes(b);
             this.b = bytes;
-            this.len = bytes.length;
+            this.end = bytes.length;
         }
     }
 
@@ -99,9 +99,21 @@ public final class SparrowhawkDeserializer {
         return pos;
     }
 
+    public int remaining() {
+        return end - pos;
+    }
+
+    public void checkElementCount(int count) {
+        if (count > remaining()) {
+            throw new ParseException(
+                "declared element count " + count + " exceeds remaining payload size " + remaining()
+            );
+        }
+    }
+
     public void done() {
-        if (pos != len) {
-            throw new RuntimeException("still has " + (len - pos) + " bytes");
+        if (pos != end) {
+            throw new RuntimeException("still has " + (end - pos) + " bytes");
         }
     }
 
