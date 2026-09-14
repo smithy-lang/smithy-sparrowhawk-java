@@ -11,6 +11,7 @@ import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeFourBList
 import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeLenPrefixedListLength;
 import static software.amazon.smithy.java.sparrowhawk.KConstants.encodeVarintListLength;
 
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -186,11 +187,27 @@ public final class SparrowhawkSerializer {
         writeBytes(s.getBytes(StandardCharsets.UTF_8));
     }
 
+    // todo: null-check message
+    public void writeString(Object o) {
+        if (o instanceof byte[]) {
+            writeBytes((byte[]) o);
+        } else {
+            writeString((String) o);
+        }
+    }
+
+    public void writeBigInteger(Object o) {
+        if (o instanceof byte[]) {
+            writeBytes((byte[]) o);
+        } else {
+            writeBytes(((BigInteger) o).toByteArray());
+        }
+    }
+
     public void writeBytes(byte[] b) {
         writeBytes(b, 0, b.length);
     }
 
-    // todo: writeString with null-check message
     public void writeBytes(Object o) {
         writeBytes((byte[]) o);
     }

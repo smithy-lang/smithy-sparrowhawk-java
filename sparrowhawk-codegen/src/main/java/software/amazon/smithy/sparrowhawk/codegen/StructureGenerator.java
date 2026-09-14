@@ -936,8 +936,10 @@ public final class StructureGenerator implements Runnable {
 
                             var fieldSymbol = symbolProvider.toSymbol(field);
                             var target = model.expectShape(field.getTarget());
-                            if (isString(target) || isBigInteger(target)) {
-                                writer.write("s.writeBytes(${fieldName:L});");
+                            if (isString(target)) {
+                                writer.write("s.writeString(${fieldName:L});");
+                            } else if (isBigInteger(target)) {
+                                writer.write("s.writeBigInteger(${fieldName:L});");
                             } else if (target.isBigDecimalShape()) {
                                 writer.write("s.writeBigDecimal(${fieldName:L});");
                             } else if (target.isBlobShape()) {

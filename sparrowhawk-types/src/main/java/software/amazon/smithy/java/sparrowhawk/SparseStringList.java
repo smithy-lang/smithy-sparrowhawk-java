@@ -20,7 +20,7 @@ public final class SparseStringList extends SparseList<String> implements Sparro
         EMPTY_LIST.values = EMPTY;
     }
 
-    private int size;
+    private int size = -1;
     private OptionalBlob[] values;
 
     public static SparseStringList fromList(List<String> strings) {
@@ -86,12 +86,15 @@ public final class SparseStringList extends SparseList<String> implements Sparro
             return;
         }
 
+        d.checkElementCount(count);
         values = new OptionalBlob[count];
+        int start = d.pos();
         for (int i = 0; i < count; i++) {
             OptionalBlob blob = new OptionalBlob();
             blob.decodeFrom(d);
             values[i] = blob;
         }
+        size = d.pos() - start;
     }
 
     @Override
@@ -109,6 +112,7 @@ public final class SparseStringList extends SparseList<String> implements Sparro
         if (size >= 0) {
             return size;
         }
+        size = 0;
         for (OptionalBlob blob : values) {
             size += byteListLengthEncodedSize(blob.size());
         }
