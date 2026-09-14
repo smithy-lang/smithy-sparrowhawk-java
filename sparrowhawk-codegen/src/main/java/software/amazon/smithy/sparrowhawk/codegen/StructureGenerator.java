@@ -46,6 +46,7 @@ import software.amazon.smithy.model.shapes.ShapeType;
 import software.amazon.smithy.model.shapes.ShapeVisitor;
 import software.amazon.smithy.model.shapes.ToShapeId;
 import software.amazon.smithy.model.traits.SparseTrait;
+import software.amazon.smithy.model.traits.UniqueItemsTrait;
 import software.amazon.smithy.protocol.traits.SparrowhawkObjectTrait;
 import software.amazon.smithy.sparrowhawk.codegen.CodeSections.EndClassSection;
 import software.amazon.smithy.sparrowhawk.codegen.CodeSections.StartClassSection;
@@ -445,7 +446,9 @@ public final class StructureGenerator implements Runnable {
                             var listType = model.expectShape(
                                 ((ListShape) model.expectShape(field.getTarget())).getMember().getTarget()
                             );
-                            if (shape.hasTrait(SparseTrait.class)) {
+                            if (shape.hasTrait(UniqueItemsTrait.class)) {
+                                sizer = new SparseListSizer(field, listType);
+                            } else if (shape.hasTrait(SparseTrait.class)) {
                                 sizer = switch (listType.getType()) {
                                     case STRUCTURE, UNION -> new SparseStructureListSizer(field, listType);
                                     case BLOB -> new SparseBlobListSizer(field);
@@ -917,7 +920,9 @@ public final class StructureGenerator implements Runnable {
                             } else if (target.isListShape()) {
                                 var valueType = listTarget(target);
                                 var valueShape = valueType.expectProperty("shape", Shape.class);
-                                if (isSparse(field)) {
+                                if (target.hasTrait(UniqueItemsTrait.class)) {
+                                    emitImplListFieldEncode(fieldSymbol);
+                                } else if (isSparse(field)) {
                                     if (isStructure(valueShape)) {
                                         writer.write("s.writeSparseObjectList(${fieldName:L});");
                                     } else if (valueShape.isBlobShape()) {
@@ -1355,7 +1360,13 @@ public final class StructureGenerator implements Runnable {
                         var valueSymbol = listTarget(model.expectShape(field.getTarget()));
                         var valueType = valueSymbol.expectProperty("shape", Shape.class);
                         writer.putContext("valueSymbol", valueSymbol);
-                        if (isSparse(field)) {
+                        if (shape.hasTrait(UniqueItemsTrait.class)) {
+                            writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
+                            writer.write("""
+                                ${listImplType:T} _l = new ${listImplType:T}();
+                                _l.decodeFrom(d);
+                                this.${fieldName:L} = _l;""");
+                        } else if (isSparse(field)) {
                             if (isStructure(valueType)) {
                                 writer.write("this.${fieldName:L} = d.decodeSparseObjectList(${valueSymbol:T}::new);");
                             } else if (valueType.isBlobShape()) {

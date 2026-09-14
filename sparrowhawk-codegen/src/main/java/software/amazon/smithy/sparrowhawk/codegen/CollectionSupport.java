@@ -34,7 +34,9 @@ final class CollectionSupport {
     static boolean needsFlyweight(Model model, Shape shape) {
         if (shape instanceof ListShape l) {
             Shape member = model.expectShape(l.getMember().getTarget());
-            return isCollection(member) || needsLeafCodec(member);
+            return shape.hasTrait(UniqueItemsTrait.class)
+                || isCollection(member)
+                || needsLeafCodec(member);
         }
         if (shape instanceof MapShape m) {
             Shape value = model.expectShape(m.getValue().getTarget());
@@ -135,6 +137,21 @@ final class CollectionSupport {
     private static void validateList(Model model, ListShape list, List<String> errors) {
         Shape member = model.expectShape(list.getMember().getTarget());
         checkLeaf(list, member, errors);
+        if (list.hasTrait(UniqueItemsTrait.class)) {
+            if (isCollection(member)) {
+                errors.add(list.getId() + ": @uniqueItems is not supported on collections of collections");
+            }
+            switch (member.getType()) {
+                case STRUCTURE, UNION -> errors.add(
+                    list.getId() + ": @uniqueItems is not supported for structure or union members"
+                        + " because generated structures do not implement hashCode"
+                );
+                default -> {}
+            }
+            if (list.hasTrait(SparseTrait.class)) {
+                errors.add(list.getId() + ": @sparse is not supported on @uniqueItems collections");
+            }
+        }
     }
 
     private static void validateMap(Model model, MapShape map, List<String> errors) {

@@ -71,6 +71,11 @@ public final class CommonSymbols {
     public static final SymbolReference List = imp("java.util", "List");
     public static final SymbolReference ArrayList = imp("java.util", "ArrayList");
     public static final SymbolReference Object = imp("java.lang", "Object");
+    public static final SymbolReference LinkedHashSet = imp("java.util", "LinkedHashSet");
+    public static final SymbolReference ParseException = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "ParseException"
+    );
     public static final SymbolReference Objects = imp("java.util", "Objects");
     public static final SymbolReference ByteBuffer = imp("java.nio", "ByteBuffer");
     public static final SymbolReference missingField = staticImp(

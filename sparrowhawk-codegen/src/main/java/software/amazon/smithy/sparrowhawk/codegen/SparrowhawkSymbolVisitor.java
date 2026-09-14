@@ -181,6 +181,8 @@ public class SparrowhawkSymbolVisitor implements SymbolProvider, ShapeVisitor<Sy
         String suffix;
         if (shape.isMapShape()) {
             suffix = "$Map";
+        } else if (shape.hasTrait(UniqueItemsTrait.class)) {
+            suffix = "$Set";
         } else {
             suffix = "$List";
         }
