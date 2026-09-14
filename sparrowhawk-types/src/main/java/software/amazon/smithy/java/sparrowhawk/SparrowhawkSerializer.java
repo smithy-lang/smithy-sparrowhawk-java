@@ -22,6 +22,7 @@ public final class SparrowhawkSerializer {
     public static final byte EMPTY_LIST_SIZE_VARINT = 1;
     static final byte BOOL_FALSE = 1, BOOL_TRUE = 3;
     static final byte EXACTLY_ONE_LIST = encodeByteLE64(KConstants.listField(1));
+    static final byte EXACTLY_ONE_LIST_VARINT = (byte) ((KConstants.listField(1) << 1) | 1);
 
     private int position;
     private final byte[] payload;
@@ -48,6 +49,10 @@ public final class SparrowhawkSerializer {
 
     public void writeEmptyObject() {
         payload[position++] = 1;
+    }
+
+    public void writeExactlyOneListField() {
+        payload[position++] = EXACTLY_ONE_LIST_VARINT;
     }
 
     public void checkFull() {

@@ -321,3 +321,7 @@ Annotated:[Struct (size: 212, type: sparrowhawk#CodegenStruct)]
     [/TypeSection]
 [/Struct]
 ```
+
+## Nested collection code generation
+
+The Java code generator supports arbitrarily nested lists and maps, including `@sparse` collections (for example, `map<string, list<list<integer>>>`).

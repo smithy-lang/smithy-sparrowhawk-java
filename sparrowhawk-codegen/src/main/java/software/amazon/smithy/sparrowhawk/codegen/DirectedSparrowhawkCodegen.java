@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import software.amazon.smithy.codegen.core.Symbol;
 import software.amazon.smithy.codegen.core.SymbolProvider;
 import software.amazon.smithy.codegen.core.directed.CreateContextDirective;
 import software.amazon.smithy.codegen.core.directed.CreateSymbolProviderDirective;
@@ -16,6 +17,8 @@ import software.amazon.smithy.codegen.core.directed.DirectedCodegen;
 import software.amazon.smithy.codegen.core.directed.GenerateEnumDirective;
 import software.amazon.smithy.codegen.core.directed.GenerateErrorDirective;
 import software.amazon.smithy.codegen.core.directed.GenerateIntEnumDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateListDirective;
+import software.amazon.smithy.codegen.core.directed.GenerateMapDirective;
 import software.amazon.smithy.codegen.core.directed.GenerateOperationDirective;
 import software.amazon.smithy.codegen.core.directed.GenerateServiceDirective;
 import software.amazon.smithy.codegen.core.directed.GenerateStructureDirective;
@@ -26,6 +29,7 @@ import software.amazon.smithy.model.knowledge.NullableIndex;
 import software.amazon.smithy.model.shapes.MemberShape;
 import software.amazon.smithy.model.shapes.ServiceShape;
 import software.amazon.smithy.model.shapes.Shape;
+import software.amazon.smithy.model.shapes.ShapeId;
 import software.amazon.smithy.model.shapes.StructureShape;
 import software.amazon.smithy.model.shapes.UnionShape;
 import software.amazon.smithy.model.transform.ModelTransformer;
@@ -91,6 +95,49 @@ public final class DirectedSparrowhawkCodegen implements
     @Override
     public void generateUnion(GenerateUnionDirective<GenerationContext, SparrowhawkSettings> directive) {
         generate(directive);
+    }
+
+    @Override
+    public void generateList(GenerateListDirective<GenerationContext, SparrowhawkSettings> directive) {
+        generateCollection(directive);
+    }
+
+    @Override
+    public void generateMap(GenerateMapDirective<GenerationContext, SparrowhawkSettings> directive) {
+        generateCollection(directive);
+    }
+
+    private static void generateCollection(
+        ShapeDirective<? extends Shape, GenerationContext, SparrowhawkSettings> directive
+    ) {
+        var symbol = directive.context()
+            .symbolProvider()
+            .toSymbol(directive.shape());
+        var flyweight = symbol
+            .getProperty("generatedCollection", Symbol.class)
+            .orElse(null);
+        if (flyweight == null) {
+            return;
+        }
+        ShapeId owner = symbol
+            .getProperty("generatedCollectionOwner", ShapeId.class)
+            .orElse(directive.shape().getId());
+        if (!owner.equals(directive.shape().getId())) {
+            return;
+        }
+        directive.context()
+            .writerDelegator()
+            .useFileWriter(
+                flyweight.getDefinitionFile(),
+                flyweight.getNamespace(),
+                writer -> new CollectionGenerator(
+                    directive.shape(),
+                    directive.model(),
+                    directive.context().symbolProvider(),
+                    writer,
+                    directive.settings()
+                ).run()
+            );
     }
 
     @Override

@@ -4,11 +4,41 @@
  */
 package software.amazon.smithy.sparrowhawk.codegen;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import software.amazon.smithy.codegen.core.Symbol;
 import software.amazon.smithy.codegen.core.SymbolReference;
 
 public final class CommonSymbols {
     private CommonSymbols() {}
+
+    private static Map<String, Object> defaultReferences;
+
+    public static synchronized Map<String, Object> defaultReferences() {
+        if (defaultReferences == null) {
+            Map<String, Object> refs = new HashMap<>();
+            try {
+                for (Field f : CommonSymbols.class.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers()) && f.getType() == SymbolReference.class) {
+                        if (refs.put(lowercaseFirstLetter(f.getName()), f.get(null)) != null) {
+                            throw new RuntimeException("duplicate context key for " + f.getName());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            defaultReferences = Collections.unmodifiableMap(refs);
+        }
+        return defaultReferences;
+    }
+
+    private static String lowercaseFirstLetter(String s) {
+        return s.substring(0, 1).toLowerCase() + s.substring(1);
+    }
 
     public enum UseOption implements SymbolReference.Option {
         STATIC
@@ -160,10 +190,6 @@ public final class CommonSymbols {
     );
     public static final SymbolReference StringMap = imp("software.amazon.smithy.java.sparrowhawk", "StringMap");
     public static final SymbolReference StructureMap = imp("software.amazon.smithy.java.sparrowhawk", "StructureMap");
-    public static final SymbolReference IntegerListMap = imp(
-        "software.amazon.smithy.java.sparrowhawk",
-        "IntegerListMap"
-    );
 
     public static final SymbolReference SparseBooleanList = imp(
         "software.amazon.smithy.java.sparrowhawk",
@@ -196,5 +222,32 @@ public final class CommonSymbols {
     public static final SymbolReference SparseTimestampList = imp(
         "software.amazon.smithy.java.sparrowhawk",
         "SparseTimestampList"
+    );
+
+    public static final SymbolReference TimestampMap = imp("software.amazon.smithy.java.sparrowhawk", "TimestampMap");
+    public static final SymbolReference BytesMap = imp("software.amazon.smithy.java.sparrowhawk", "BytesMap");
+    public static final SymbolReference CopiedBytesMap = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "CopiedBytesMap"
+    );
+    public static final SymbolReference SparseStructureMap = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "SparseStructureMap"
+    );
+    public static final SymbolReference NestedCollectionMap = imp(
+        "software.amazon.smithy.java.sparrowhawk",
+        "NestedCollectionMap"
+    );
+    public static final SymbolReference blobListEncodedSize = staticImp(
+        "software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer",
+        "blobListEncodedSize"
+    );
+    public static final SymbolReference sparseObjectListSize = staticImp(
+        "software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer",
+        "sparseObjectListSize"
+    );
+    public static final SymbolReference sparseBlobListSize = staticImp(
+        "software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer",
+        "sparseBlobListSize"
     );
 }

@@ -26,10 +26,7 @@ import static software.amazon.smithy.sparrowhawk.codegen.Util.isStructure;
 import static software.amazon.smithy.utils.StringUtils.capitalize;
 import static software.amazon.smithy.utils.StringUtils.upperCase;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -54,27 +51,7 @@ import software.amazon.smithy.sparrowhawk.codegen.CodeSections.EndClassSection;
 import software.amazon.smithy.sparrowhawk.codegen.CodeSections.StartClassSection;
 
 public final class StructureGenerator implements Runnable {
-    private static final Map<String, Object> DEFAULT_REFERENCES;
-
-    static {
-        DEFAULT_REFERENCES = new HashMap<>();
-        try {
-            for (Field f : CommonSymbols.class.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers()) && f.getType() == SymbolReference.class) {
-                    // apparently smithy context keys have to start with a lowercase letter
-                    if (DEFAULT_REFERENCES.put(lowercaseFirstLetter(f.getName()), f.get(null)) != null) {
-                        throw new RuntimeException("duplicate context key for " + f.getName());
-                    }
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static String lowercaseFirstLetter(String s) {
-        return s.substring(0, 1).toLowerCase() + s.substring(1);
-    }
+    private static final Map<String, Object> DEFAULT_REFERENCES = CommonSymbols.defaultReferences();
 
     private final Shape shape;
     private final SymbolProvider symbolProvider;
@@ -280,7 +257,7 @@ public final class StructureGenerator implements Runnable {
                         Object field = ${fieldName:L};
                         if (field == null) return null;
                         if (field.getClass() == ${sparrowhawkCollection:T}.class) {
-                            ${fieldSymbol:T} m = ((${sparrowhawkCollection:T}) field).to${?nestingLevel}Nested${/nestingLevel}Map(${?nestingLevel}${nestingLevel:L}${/nestingLevel});
+                            ${fieldSymbol:T} m = ((${sparrowhawkCollection:T}) field).toMap();
                             this.${fieldName:L} = m;
                             return m;
                         }
@@ -481,8 +458,11 @@ public final class StructureGenerator implements Runnable {
                                     case BYTE, SHORT, INTEGER, LONG, BOOLEAN, INT_ENUM, FLOAT, DOUBLE, TIMESTAMP ->
                                         new SimpleListSizer(field, listType);
                                     case STRUCTURE, UNION -> new StructureListSizer(field);
+                                    case LIST, MAP, BIG_INTEGER, BIG_DECIMAL -> new SparseListSizer(field, listType);
                                     default ->
-                                        throw new IllegalStateException("Unexpected value: " + listType.getType());
+                                        throw new IllegalStateException(
+                                            "rejected by validation: " + listType.getType()
+                                        );
                                 };
                             }
                         } else if (isString(shape)) {
@@ -576,7 +556,7 @@ public final class StructureGenerator implements Runnable {
                         size = ((${sparrowhawkCollection:T}) field).size();
                     } else {
                         ${sparrowhawkCollection:T} m = new ${sparrowhawkCollection:T}(${ctor:C});
-                        m.from${?nestingLevel}Nested${/nestingLevel}Map((${mapSymbol:T}) field${?nestingLevel}, ${nestingLevel:L}, ${supp:C}${/nestingLevel});
+                        m.fromMap((${mapSymbol:T}) field);
                         this.${fieldName:L} = m;
                         size = m.size();
                     }
@@ -589,28 +569,12 @@ public final class StructureGenerator implements Runnable {
         var sparrowhawkCollectionSymbol = symbol.expectProperty("sparrowhawkCollection", SymbolReference.class);
         writer.putContext("sparrowhawkCollection", sparrowhawkCollectionSymbol);
 
-        var nestingOpt = symbol.getProperty("nesting", List.class);
-        if (nestingOpt.isPresent()) {
-            var nesting = nestingOpt.get();
-            writer.putContext("nestedCollections", nesting);
-            writer.putContext("fromNestedSupplier", symbol.expectProperty("fromNestedSupplier", List.class));
-            writer.putContext("nestingLevel", symbol.expectProperty("nestingLevel", Integer.class));
-            writer.putContext("supp", writer.consumer(w -> {
-                w.writeInline("${#fromNestedSupplier}() -> new ${value:T}(${/fromNestedSupplier}");
-                w.writeInline("${#fromNestedSupplier})${/fromNestedSupplier}");
-            }));
-            writer.putContext("ctor", writer.consumer(w -> {
-                w.writeInline("${#nestedCollections}() -> new ${value:T}(${/nestedCollections}");
-                w.writeInline("${#nestedCollections})${/nestedCollections}");
-            }));
-        } else {
-            writer.putContext("ctor", writer.consumer(w -> {
-                var valueSymbol = symbol.expectProperty("value", Symbol.class);
-                if (isStructure(valueSymbol.expectProperty("shape", Shape.class))) {
-                    w.writeInline("$T::new", valueSymbol);
-                }
-            }));
-        }
+        writer.putContext("ctor", writer.consumer(w -> {
+            var valueSymbol = symbol.expectProperty("value", Symbol.class);
+            if (isStructure(valueSymbol.expectProperty("shape", Shape.class))) {
+                w.writeInline("$T::new", valueSymbol);
+            }
+        }));
     }
 
     private static boolean isString(Shape shape) {
@@ -949,10 +913,7 @@ public final class StructureGenerator implements Runnable {
                                 );
                                 writer.write("s.${writeBlob:L}(${fieldName:L});");
                             } else if (target.isMapShape()) {
-                                writer.write(
-                                    "(($T) ${fieldName:L}).encodeTo(s);",
-                                    fieldSymbol.expectProperty("sparrowhawkCollection", SymbolReference.class)
-                                );
+                                emitMapFieldEncode(fieldSymbol);
                             } else if (target.isListShape()) {
                                 var valueType = listTarget(target);
                                 var valueShape = valueType.expectProperty("shape", Shape.class);
@@ -962,11 +923,10 @@ public final class StructureGenerator implements Runnable {
                                     } else if (valueShape.isBlobShape()) {
                                         writer.write("s.writeSparseBlobList(${fieldName:L});");
                                     } else {
-                                        writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
-                                        writer.write("((${listImplType:T}) ${fieldName:L}).encodeTo(s);");
+                                        emitImplListFieldEncode(fieldSymbol);
                                     }
                                 } else if (isString(valueShape)) {
-                                    writer.write("(($T) ${fieldName:L}).encodeTo(s);", StringList);
+                                    emitImplListFieldEncode(fieldSymbol);
                                 } else if (isVarintShape(valueShape) || isDoubleShape(valueShape) || valueShape
                                     .isFloatShape()) {
                                         writer.write("s.write$TList(${fieldName:L});", valueType);
@@ -980,8 +940,15 @@ public final class StructureGenerator implements Runnable {
                                         writer.dedent().write("}");
                                     } else if (valueShape.isBlobShape()) {
                                         writer.write("s.writeBlobList(${fieldName:L});");
+                                    } else if (
+                                        valueShape.isListShape()
+                                            || valueShape.isMapShape()
+                                            || valueShape.isBigIntegerShape()
+                                            || valueShape.isBigDecimalShape()
+                                    ) {
+                                        emitImplListFieldEncode(fieldSymbol);
                                     } else {
-                                        throw new RuntimeException("no list encoder for: " + field);
+                                        throw new RuntimeException("rejected by validation: " + field);
                                     }
                             } else if (isStructure(target)) {
                                 writer.write("${fieldName:L}.encodeTo(s);");
@@ -1001,6 +968,41 @@ public final class StructureGenerator implements Runnable {
                 );
             }
         });
+    }
+
+    private void emitImplListFieldEncode(Symbol fieldSymbol) {
+        writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
+        writer.putContext("listType", fieldSymbol);
+        writer.write("""
+            {
+                Object _f = ${fieldName:L};
+                ${listImplType:T} _l;
+                if (_f.getClass() == ${listImplType:T}.class) {
+                    _l = (${listImplType:T}) _f;
+                } else {
+                    _l = ${listImplType:T}.fromList((${listType:T}) _f);
+                    this.${fieldName:L} = _l;
+                }
+                _l.encodeTo(s);
+            }""");
+    }
+
+    private void emitMapFieldEncode(Symbol fieldSymbol) {
+        setupSparrowhawkCollectionConstructor(fieldSymbol);
+        writer.putContext("mapType", fieldSymbol);
+        writer.write("""
+            {
+                Object _f = ${fieldName:L};
+                ${sparrowhawkCollection:T} _m;
+                if (_f.getClass() == ${sparrowhawkCollection:T}.class) {
+                    _m = (${sparrowhawkCollection:T}) _f;
+                } else {
+                    _m = new ${sparrowhawkCollection:T}(${ctor:C});
+                    _m.fromMap((${mapType:T}) _f);
+                    this.${fieldName:L} = _m;
+                }
+                _m.encodeTo(s);
+            }""");
     }
 
     private void emitWriteVarints() {
@@ -1392,8 +1394,19 @@ public final class StructureGenerator implements Runnable {
                                     ${arrayName:L}[i] = x;
                                 }
                                 this.${fieldName:L} = ${asList:T}(${arrayName:L});""");
+                        } else if (
+                            valueType.isListShape()
+                                || valueType.isMapShape()
+                                || valueType.isBigIntegerShape()
+                                || valueType.isBigDecimalShape()
+                        ) {
+                            writer.putContext("listImplType", fieldSymbol.expectProperty("listImplType"));
+                            writer.write("""
+                                ${listImplType:T} _l = new ${listImplType:T}();
+                                _l.decodeFrom(d);
+                                this.${fieldName:L} = _l;""");
                         } else {
-                            throw new RuntimeException("can't handle: " + field);
+                            throw new RuntimeException("rejected by validation: " + field);
                         }
                     } else if (isStructure(shape)) {
                         writer.write("""

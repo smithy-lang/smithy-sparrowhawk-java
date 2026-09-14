@@ -7,6 +7,7 @@ import static software.amazon.smithy.java.sparrowhawk.SparrowhawkSerializer.ulon
 
 import java.util.List;
 
+@Deprecated
 public final class IntegerListMap extends NumberMap<List<Integer>> {
     @Override
     protected int decodeValueCount(int encodedCount) {

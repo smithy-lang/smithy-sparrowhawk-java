@@ -1,5 +1,16 @@
 {
   "version": "1.0",
+  "projections": {
+    "copied": {
+      "plugins": {
+        "sparrowhawk-java-codegen": {
+          "service": "demo#DemoService",
+          "zeroCopyBuffers": false,
+          "classPrefix": "Cb"
+        }
+      }
+    }
+  },
   "plugins": {
     "sparrowhawk-java-codegen": {
       "service": "demo#DemoService"

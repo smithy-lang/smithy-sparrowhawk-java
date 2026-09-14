@@ -15,7 +15,6 @@ dependencies {
     implementation(project(":sparrowhawk-traits"))
     implementation(project(":sparrowhawk-types"))
     implementation(project(":sparrowhawk-codegen"))
-
 }
 
 tasks {
@@ -26,10 +25,12 @@ tasks {
 
 afterEvaluate {
     val generatedCode = smithy.getPluginProjectionPath(smithy.sourceProjection.get(), "sparrowhawk-java-codegen")
+    val copiedBuffersCode = smithy.getPluginProjectionPath("copied", "sparrowhawk-java-codegen")
     sourceSets {
         main {
             java {
                 srcDir(generatedCode)
+                srcDir(copiedBuffersCode)
             }
         }
     }
