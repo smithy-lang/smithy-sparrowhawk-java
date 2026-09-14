@@ -18,7 +18,7 @@ public final class StringList implements SparrowhawkObject {
         EMPTY_LIST.values = EMPTY;
     }
 
-    private int size;
+    private int size = -1;
     private ByteBuffer[] values;
 
     public static StringList fromList(List<String> strings) {
@@ -70,10 +70,13 @@ public final class StringList implements SparrowhawkObject {
             return;
         }
 
+        d.checkElementCount(count);
         values = new ByteBuffer[count];
+        int start = d.pos();
         for (int i = 0; i < count; i++) {
             values[i] = d.bytes();
         }
+        size = d.pos() - start;
     }
 
     @Override
@@ -91,13 +94,9 @@ public final class StringList implements SparrowhawkObject {
         if (size >= 0) {
             return size;
         }
-        if (values.length > 0) {
-            for (ByteBuffer value : values) {
-                int len = value.remaining();
-                size += byteListLengthEncodedSize(len) + len;
-            }
-        } else {
-            size = 0;
+        size = 0;
+        for (ByteBuffer value : values) {
+            size += byteListLengthEncodedSize(value.remaining());
         }
 
         this.size = size;

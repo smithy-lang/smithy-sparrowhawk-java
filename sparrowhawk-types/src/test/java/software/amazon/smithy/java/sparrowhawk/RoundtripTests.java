@@ -91,6 +91,14 @@ public class RoundtripTests {
         assertEquals(map, roundtrip.toMap());
     }
 
+    @Test
+    public void decodedStructureCanBeReencoded() {
+        SparrowhawkCodegenOptionalStruct original = makeStruct();
+        SparrowhawkCodegenOptionalStruct decoded = serde(original, new SparrowhawkCodegenOptionalStruct());
+        SparrowhawkCodegenOptionalStruct reencoded = serde(decoded, new SparrowhawkCodegenOptionalStruct());
+        assertEquals(original, reencoded);
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {1, 10000})
     public void stringList(int len) {
