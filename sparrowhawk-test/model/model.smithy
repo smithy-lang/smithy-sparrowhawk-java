@@ -151,6 +151,36 @@ structure NestedCollectionsInput {
 
     @idx(41)
     sparseBigDecimalList: SparseBigDecimalList
+
+    @idx(42)
+    intSet: IntSet
+
+    @idx(43)
+    stringSet: StringSet
+
+    @idx(44)
+    blobSet: BlobSet
+
+    @idx(45)
+    longSet: LongSet
+
+    @idx(46)
+    bigIntegerSet: BigIntegerSet
+
+    @idx(47)
+    bigDecimalSet: BigDecimalSet
+
+    @idx(48)
+    intSetList: IntSetList
+
+    @idx(49)
+    stringSetMap: StringSetMap
+
+    @idx(50)
+    sparseIntSetList: SparseIntSetList
+
+    @idx(51)
+    duplicateIntSet: IntSetDuplicate
 }
 
 list BigIntegerList {
@@ -203,6 +233,55 @@ list SparseBigDecimalList {
 
 list ListOfSparseBigIntegerList {
     member: SparseBigIntegerList
+}
+
+@uniqueItems
+list IntSet {
+    member: Integer
+}
+
+@uniqueItems
+list IntSetDuplicate {
+    member: Integer
+}
+
+@uniqueItems
+list StringSet {
+    member: String
+}
+
+@uniqueItems
+list BlobSet {
+    member: Blob
+}
+
+@uniqueItems
+list LongSet {
+    member: PrimitiveLong
+}
+
+@uniqueItems
+list BigIntegerSet {
+    member: BigInteger
+}
+
+@uniqueItems
+list BigDecimalSet {
+    member: BigDecimal
+}
+
+list IntSetList {
+    member: IntSet
+}
+
+map StringSetMap {
+    key: String
+    value: StringSet
+}
+
+@sparse
+list SparseIntSetList {
+    member: IntSet
 }
 
 @sparse

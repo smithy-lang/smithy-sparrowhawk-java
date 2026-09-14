@@ -137,7 +137,7 @@ public final class BigDecimalHolder implements SparrowhawkObject {
     private void writeListFields(SparrowhawkSerializer s) {
         if ($list_0 != 0x0L) {
             s.writeVarUL($list_0);
-            s.writeBytes(mantissa);
+            s.writeBigInteger(mantissa);
         }
     }
 

@@ -28,6 +28,7 @@ import software.amazon.smithy.model.shapes.MapShape;
 import software.amazon.smithy.model.shapes.Shape;
 import software.amazon.smithy.model.shapes.ShapeType;
 import software.amazon.smithy.model.traits.SparseTrait;
+import software.amazon.smithy.model.traits.UniqueItemsTrait;
 
 final class CollectionGenerator implements Runnable {
     private final Shape shape;
@@ -62,6 +63,8 @@ final class CollectionGenerator implements Runnable {
         writer.putContext("userType", userSymbol);
         if (shape.isMapShape()) {
             generateMap((MapShape) shape);
+        } else if (shape.hasTrait(UniqueItemsTrait.class)) {
+            generateSet((ListShape) shape);
         } else {
             generateList((ListShape) shape);
         }
@@ -242,6 +245,147 @@ final class CollectionGenerator implements Runnable {
         writer.write("@Override");
         writer.openBlock("protected int decodeValueCount(int encodedCount) {", "}", () -> {
             writer.write("return $T(encodedCount);", decodeLenPrefixedListLengthChecked);
+        });
+
+        writer.dedent().write("}");
+    }
+
+    private void generateSet(ListShape set) {
+        Shape member = model.expectShape(set.getMember().getTarget());
+        writer.putContext("elementType", symbolProvider.toSymbol(member));
+
+        SymbolReference headerEncoder = switch (member.getType()) {
+            case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM, LONG -> encodeVarintListLength;
+            case FLOAT -> encodeFourBListLength;
+            case DOUBLE, TIMESTAMP -> encodeEightBListLength;
+            case STRING, ENUM, BLOB, BIG_INTEGER, BIG_DECIMAL -> encodeLenPrefixedListLength;
+            default -> throw new IllegalStateException("rejected by validation: " + set);
+        };
+        SymbolReference countDecoder = switch (member.getType()) {
+            case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM, LONG -> CommonSymbols.decodeVarintListLengthChecked;
+            case FLOAT -> CommonSymbols.decodeFourByteListLengthChecked;
+            case DOUBLE, TIMESTAMP -> CommonSymbols.decodeEightByteListLengthChecked;
+            case STRING, ENUM, BLOB, BIG_INTEGER, BIG_DECIMAL -> decodeLenPrefixedListLengthChecked;
+            default -> throw new IllegalStateException("rejected by validation: " + set);
+        };
+        String writeStatement = switch (member.getType()) {
+            case BOOLEAN -> "s.writeBool(e);";
+            case BYTE -> "s.writeVarB(e);";
+            case SHORT -> "s.writeVarS(e);";
+            case INTEGER, INT_ENUM -> "s.writeVarI(e);";
+            case LONG -> "s.writeVarL(e);";
+            case FLOAT -> "s.writeFloat(e);";
+            case DOUBLE -> "s.writeDouble(e);";
+            case TIMESTAMP -> "s.writeDate(e);";
+            case STRING, ENUM -> "s.writeString(e);";
+            case BLOB -> "s.writeBytes(e);";
+            case BIG_INTEGER -> "s.writeBigInteger(e);";
+            case BIG_DECIMAL -> "new ${sparrowhawkBigDecimalHolder:T}(e).encodeTo(s);";
+            default -> throw new IllegalStateException("rejected by validation: " + set);
+        };
+        String decodeExpression = switch (member.getType()) {
+            case BOOLEAN -> "d.bool()";
+            case BYTE -> "d.varB()";
+            case SHORT -> "d.varS()";
+            case INTEGER, INT_ENUM -> "d.varI()";
+            case LONG -> "d.varL()";
+            case FLOAT -> "d.f4()";
+            case DOUBLE -> "d.d8()";
+            case TIMESTAMP -> "d.date()";
+            case STRING, ENUM -> "d.string()";
+            case BLOB -> settings.zeroCopyBuffers() ? "d.bytes()" : "d.bytesCopied()";
+            case BIG_INTEGER -> "d.bigInteger()";
+            case BIG_DECIMAL -> "d.bigDecimal()";
+            default -> throw new IllegalStateException("rejected by validation: " + set);
+        };
+        Runnable addElementSize = () -> {
+            switch (member.getType()) {
+                case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM -> writer.write("size += $T(e);", intSize);
+                case LONG -> writer.write("size += $T(e);", longSize);
+                case FLOAT -> writer.write("size += 4;");
+                case DOUBLE, TIMESTAMP -> writer.write("size += 8;");
+                case STRING, ENUM ->
+                    writer.write("size += $T(e.getBytes(${uTF_8:T}).length);", byteListLengthEncodedSize);
+                case BLOB -> writer.write("size += $T(e.remaining());", byteListLengthEncodedSize);
+                case BIG_INTEGER -> writer.write("size += $T(e.toByteArray().length);", byteListLengthEncodedSize);
+                case BIG_DECIMAL -> writer.write(
+                    "size += $T(new ${sparrowhawkBigDecimalHolder:T}(e).size());",
+                    byteListLengthEncodedSize
+                );
+                default -> throw new IllegalStateException("rejected by validation: " + set);
+            }
+        };
+
+        writer.write("public final class ${className:L} implements ${sparrowhawkObject:T} {");
+        writer.indent();
+        writer.write("""
+            private ${userType:T} values = new ${linkedHashSet:T}<>();
+            private int size = -1;
+            """);
+
+        writer.openBlock("public static ${className:L} fromList(${userType:T} list) {", "}\n", () -> {
+            writer.write("""
+                ${className:L} l = new ${className:L}();
+                int size = 0;""");
+            writer.openBlock("for (${elementType:T} e : list) {", "}", addElementSize);
+            writer.write("""
+                l.values = list;
+                l.size = size;
+                return l;""");
+        });
+
+        writer.write("""
+            public ${userType:T} toList() {
+                return values;
+            }
+
+            public int elementCount() {
+                return values.size();
+            }
+            """);
+
+        writer.write("@Override");
+        writer.openBlock("public void decodeFrom(${sparrowhawkDeserializer:T} d) {", "}\n", () -> {
+            writer.write("""
+                int count = $T(d.varUL());
+                if (count <= 0) {
+                    this.values = new ${linkedHashSet:T}<>();
+                    this.size = 0;
+                    return;
+                }
+                d.checkElementCount(count);
+                ${userType:T} values = new ${linkedHashSet:T}<>(count / 3 * 4 + 1);
+                int start = d.pos();""", countDecoder);
+            writer.openBlock("for (int i = 0; i < count; i++) {", "}", () -> {
+                writer.write("if (!values.add($L)) {", decodeExpression).indent();
+                writer.write("throw new ${parseException:T}(\"duplicate element in @uniqueItems collection\");");
+                writer.dedent().write("}");
+            });
+            writer.write("""
+                this.values = values;
+                this.size = d.pos() - start;""");
+        });
+
+        writer.write("@Override");
+        writer.openBlock("public void encodeTo(${sparrowhawkSerializer:T} s) {", "}\n", () -> {
+            writer.write("""
+                ${userType:T} values = this.values;
+                s.writeVarUL($T(values.size()));""", headerEncoder);
+            writer.openBlock("for (${elementType:T} e : values) {", "}", () -> writer.write(writeStatement));
+        });
+
+        writer.write("@Override");
+        writer.openBlock("public int size() {", "}", () -> {
+            writer.write("""
+                int size = this.size;
+                if (size >= 0) {
+                    return size;
+                }
+                size = 0;""");
+            writer.openBlock("for (${elementType:T} e : values) {", "}", addElementSize);
+            writer.write("""
+                this.size = size;
+                return size;""");
         });
 
         writer.dedent().write("}");
@@ -501,7 +645,7 @@ final class CollectionGenerator implements Runnable {
 
         @Override
         void emitEncode(String stored) {
-            writer.write("s.writeBytes($L);", stored);
+            writer.write("s.writeBigInteger($L);", stored);
         }
 
         @Override
