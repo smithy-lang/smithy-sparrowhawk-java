@@ -44,6 +44,7 @@ public final class StructureMap<T extends SparrowhawkObject> extends Sparrowhawk
         return m;
     }
 
+    @Deprecated
     public Map<String, T> toNestedMap(int depth) {
         int sz = keys.length;
         Map m = new HashMap<>(sz / 3 * 4);
@@ -63,6 +64,7 @@ public final class StructureMap<T extends SparrowhawkObject> extends Sparrowhawk
         return new String(b.array(), b.arrayOffset() + b.position(), b.remaining(), StandardCharsets.UTF_8);
     }
 
+    @Deprecated
     public void fromNestedMap(Map<String, ?> map, int depth, Supplier<SparrowhawkMap<?>> supp) {
         int len = map.size();
         if (len == 0) {

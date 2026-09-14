@@ -14,7 +14,7 @@ import software.amazon.smithy.sparrowhawk.codegen.Enhancer;
 
 class DemoTest {
     private static final Model MODEL = new ModelAssembler()
-        .addImport(Paths.get(System.getProperty("user.dir"), "model", "model.smithy"))
+        .addImport(Paths.get(System.getProperty("user.dir"), "model"))
         .discoverModels()
         .assemble()
         .unwrap();

@@ -29,6 +29,7 @@ import software.amazon.smithy.model.shapes.Shape;
 import software.amazon.smithy.model.shapes.ShapeId;
 import software.amazon.smithy.model.shapes.ShapeType;
 import software.amazon.smithy.model.shapes.StructureShape;
+import software.amazon.smithy.model.traits.SparseTrait;
 import software.amazon.smithy.protocol.traits.IdxTrait;
 
 /**
@@ -119,8 +120,13 @@ public final class Enhancer {
                 return;
             }
             printWithIndent(level, "[List (size: %d, valueType: %s, bytes: %d-...)]", len, member.getId(), startPos);
+            boolean sparse = shape.hasTrait(SparseTrait.class);
             for (int i = 0; i < len; i++) {
-                enhanceNext(deser, member, level + 1);
+                if (sparse) {
+                    enhanceSparseElement(deser, member, level + 1);
+                } else {
+                    enhanceNext(deser, member, level + 1);
+                }
             }
             printWithIndent(level, "[/List (bytes: %d-%d)]", startPos, deser.pos() - 1);
         } else if (shape instanceof MapShape) {
@@ -217,8 +223,19 @@ public final class Enhancer {
                 beforeValLen,
                 afterValLen - 1
             );
+            boolean sparseMap = shape.hasTrait(SparseTrait.class);
             for (int i = 0; i < keyLen; i++) {
-                if (valueShape.getType().getCategory() == ShapeType.Category.SIMPLE) {
+                if (sparseMap) {
+                    printWithIndent(
+                        level + 1,
+                        "[Entry (key: %s, keyBytes: %d-%d)]",
+                        keys.get(i),
+                        keyStartPos[i],
+                        keyEndPos[i]
+                    );
+                    enhanceSparseElement(deser, valueShape, level + 2);
+                    printWithIndent(level + 1, "[/Entry]");
+                } else if (valueShape.getType().getCategory() == ShapeType.Category.SIMPLE) {
                     int beforeVal = deser.pos();
                     Object val = getSimpleValue(deser, valueShape);
                     int afterVal = deser.pos();
@@ -257,6 +274,42 @@ public final class Enhancer {
     private void printWithIndent(int level, String s, Object... args) {
         for (int i = 0; i < level; i++) { output.print("    "); }
         output.printf((s) + "%n", args);
+    }
+
+    private void enhanceSparseElement(SparrowhawkDeserializer deser, Shape member, int level) {
+        int startPos = deser.pos();
+        long wrapperLen = deser.varUL();
+        if (wrapperLen == 0) {
+            printWithIndent(level, "[> null (bytes: %d-%d)]", startPos, deser.pos() - 1);
+            return;
+        }
+
+        switch (member.getType()) {
+            case BOOLEAN, BYTE, SHORT, INTEGER, INT_ENUM, LONG ->
+                enhanceSparseSimple(deser, member, level, KConstants.varintField(1));
+            case FLOAT -> enhanceSparseSimple(deser, member, level, KConstants.fourField(1));
+            case DOUBLE, TIMESTAMP -> enhanceSparseSimple(deser, member, level, KConstants.eightField(1));
+            default -> {
+                deser.expectExactlyOneListField();
+                enhanceNext(deser, member, level);
+            }
+        }
+    }
+
+    private void enhanceSparseSimple(SparrowhawkDeserializer deser, Shape member, int level, long expectedFieldset) {
+        int beforeFieldset = deser.pos();
+        long fieldset = deser.varUL();
+        if (fieldset != expectedFieldset) {
+            throw new BadInputException(
+                beforeFieldset,
+                "Sparse element fieldset MUST be %d, was %d",
+                expectedFieldset,
+                fieldset
+            );
+        }
+        int beforeVal = deser.pos();
+        Object val = getSimpleValue(deser, member);
+        printWithIndent(level, "[> %s (bytes: %d-%d)]", val, beforeVal, deser.pos() - 1);
     }
 
     private void enhanceStruct(SparrowhawkDeserializer deser, StructureShape shape, int level, long len) {

@@ -345,6 +345,13 @@ public final class SparrowhawkDeserializer {
         throw new ParseException("improperly encoded sparse list");
     }
 
+    public void expectExactlyOneListField() {
+        byte fieldSet = b[pos++];
+        if (fieldSet != SparrowhawkSerializer.EXACTLY_ONE_LIST_VARINT && fieldSet != EXACTLY_ONE_LIST) {
+            badSparseList();
+        }
+    }
+
     public void skipRemaining(long fieldset, int type) {
         long bitmask = ALL_FIELDS_UNKNOWN;
         switch (type) {
